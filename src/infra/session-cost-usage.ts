@@ -111,6 +111,8 @@ const USAGE_COST_ROLLUP_VERSION = 2;
 const USAGE_COST_TRANSCRIPT_STAT_CONCURRENCY = 32;
 const USAGE_COST_FILE_ANCHOR_BYTES = 4096;
 const USAGE_COST_DIRECT_REFRESH_RETRY_MS = 25;
+const USAGE_COST_REFRESH_RETRY_MIN_MS = 50;
+const USAGE_COST_REFRESH_RETRY_MAX_MS = 5_000;
 const logger = createSubsystemLogger("usage-cost-cache");
 
 type UsageCostRefreshState = {
@@ -121,6 +123,7 @@ type UsageCostRefreshState = {
   pendingSessionFiles: Set<string>;
   running: boolean;
   sessionsDir: string;
+  busyRetryDelayMs: number;
   timer?: ReturnType<typeof setTimeout>;
 };
 
@@ -1598,6 +1601,8 @@ async function refreshCostUsageCacheForAgent(params?: {
   }
 }
 
+const usageCostRefreshRuntime = { refreshCostUsageCacheForAgent };
+
 async function refreshCostUsageCache(params?: {
   config?: OpenClawConfig;
   agentId?: string;
@@ -1744,6 +1749,7 @@ function requestCostUsageCacheRefresh(params?: {
     pendingSessionFiles: new Set(),
     running: false,
     sessionsDir: resolveSessionTranscriptsDirForAgent(params?.agentId),
+    busyRetryDelayMs: USAGE_COST_REFRESH_RETRY_MIN_MS,
   };
   mergeUsageCostRefreshRequest(state, params);
   usageCostRefreshes.set(refreshKey, state);
@@ -1803,7 +1809,7 @@ async function runQueuedUsageCostRefresh(
         state.pendingSessionFiles.clear();
       }
       state.fullRefreshRequested = false;
-      const result = await refreshCostUsageCacheForAgent({
+      const result = await usageCostRefreshRuntime.refreshCostUsageCacheForAgent({
         config: state.config,
         agentId: state.agentId,
         databasePath: state.databasePath,
@@ -1818,9 +1824,15 @@ async function runQueuedUsageCostRefresh(
             state.pendingSessionFiles.add(sessionFile);
           }
         }
-        retryDelayMs = 50;
+        retryDelayMs = state.busyRetryDelayMs;
+        // Contention among many per-agent refreshes must degrade to polling, not a 20Hz spin.
+        state.busyRetryDelayMs = Math.min(
+          state.busyRetryDelayMs * 2,
+          USAGE_COST_REFRESH_RETRY_MAX_MS,
+        );
         break;
       }
+      state.busyRetryDelayMs = USAGE_COST_REFRESH_RETRY_MIN_MS;
     }
   } catch (error) {
     logger.warn(`background refresh failed: ${formatErrorMessage(error)}`, { error });
@@ -1833,6 +1845,22 @@ async function runQueuedUsageCostRefresh(
     }
   }
 }
+
+function clearUsageCostRefreshesForTest(): void {
+  for (const state of usageCostRefreshes.values()) {
+    if (state.timer) {
+      clearTimeout(state.timer);
+    }
+  }
+  usageCostRefreshes.clear();
+}
+
+// Exposed as one narrow seam for deterministic timer-driven queue tests.
+export const testApi = {
+  requestCostUsageCacheRefresh,
+  usageCostRefreshRuntime,
+  clearUsageCostRefreshesForTest,
+};
 
 /**
  * Scan all transcript files to discover sessions not in the session store.
