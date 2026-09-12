@@ -148,6 +148,8 @@ export type OpenClawConfig = {
   ui?: {
     /** Accent color for OpenClaw UI chrome (hex). */
     seamColor?: string;
+    /** Automatically generate session titles via model requests. Defaults to false. */
+    autoTitle?: boolean;
     /**
      * Operator display preferences. Canonical config home so agents can
      * change them through the approval gate and clients stay in sync; the

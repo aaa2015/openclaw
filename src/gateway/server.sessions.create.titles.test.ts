@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { waitForFile } from "../../test/helpers/process-wait.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
@@ -36,7 +36,11 @@ vi.mock("../plugins/session-discussion-registry.js", () => ({
 }));
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
+beforeEach(() => {
+  process.env.OPENCLAW_ENABLE_AUTO_TITLE = "1";
+});
 afterEach(() => {
+  delete process.env.OPENCLAW_ENABLE_AUTO_TITLE;
   titleMocks.generate.mockReset();
   titleMocks.open.mockReset();
   titleMocks.lookup.mockReset();

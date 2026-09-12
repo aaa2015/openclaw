@@ -4,7 +4,10 @@ import {
   errorShape,
   validateSessionsTitlePrepareParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { prepareDashboardSessionTitle } from "../dashboard-session-title.js";
+import {
+  isDashboardSessionTitleEnabled,
+  prepareDashboardSessionTitle,
+} from "../dashboard-session-title.js";
 import { ModelAccountConnectAuthorityError } from "../model-account-connect.js";
 import { authorizeGatewaySessionCreation } from "../operator-role-policy.js";
 import { resolveSessionCreateModelSelection } from "../session-create-model-selection.js";
@@ -53,7 +56,12 @@ export const sessionTitleHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    if (params.incognito || !params.message.trim() || params.message.trim().startsWith("/")) {
+    if (
+      !isDashboardSessionTitleEnabled(cfg) ||
+      params.incognito ||
+      !params.message.trim() ||
+      params.message.trim().startsWith("/")
+    ) {
       respond(true, { title: null });
       return;
     }

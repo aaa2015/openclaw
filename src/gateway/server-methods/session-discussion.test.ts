@@ -45,6 +45,7 @@ vi.mock("./sessions-shared.js", () => ({
 
 const cfg = {
   agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
+  ui: { autoTitle: true },
 } as OpenClawConfig;
 const sessionKey = "agent:main:thread";
 const storePath = "/tmp/openclaw/sessions.sqlite";

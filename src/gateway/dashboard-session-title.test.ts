@@ -25,6 +25,8 @@ import type { ChatAttachment } from "./chat-attachments.js";
 import {
   buildDashboardSessionTitleSource,
   generateWorktreeSessionTitle,
+  isDashboardSessionTitleCandidate,
+  isDashboardSessionTitleEnabled,
   maybeGenerateDashboardSessionTitle,
   prepareDashboardSessionTitle,
 } from "./dashboard-session-title.js";
@@ -33,6 +35,7 @@ import { hasExplicitSessionName, resolveExplicitSessionName } from "./session-ti
 
 const cfg = {
   agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
+  ui: { autoTitle: true },
 } as OpenClawConfig;
 const baseEntry: SessionEntry = {
   sessionId: "session-1",
@@ -193,6 +196,7 @@ describe("maybeGenerateDashboardSessionTitle", () => {
           utilityModel: "openai/gpt-5.6-luna",
         },
       },
+      ui: { autoTitle: true },
     } as OpenClawConfig;
     resolveUtilityModelRefForAgent.mockReturnValue("openai/gpt-5.6-luna");
 
@@ -647,5 +651,90 @@ describe("deriveGoalSessionTitle", () => {
     expect(result).toBeDefined();
     expect(result!.length).toBeLessThanOrEqual(60);
     expect(result!.endsWith("…")).toBe(true);
+  });
+});
+
+describe("isDashboardSessionTitleEnabled", () => {
+  const previousEnv = process.env.OPENCLAW_ENABLE_AUTO_TITLE;
+  const previousDisableEnv = process.env.OPENCLAW_DISABLE_AUTO_TITLE;
+
+  beforeEach(() => {
+    generateConversationLabelWithFallback.mockReset();
+    updateSessionEntry.mockReset();
+  });
+
+  afterEach(() => {
+    if (previousEnv !== undefined) {
+      process.env.OPENCLAW_ENABLE_AUTO_TITLE = previousEnv;
+    } else {
+      delete process.env.OPENCLAW_ENABLE_AUTO_TITLE;
+    }
+    if (previousDisableEnv !== undefined) {
+      process.env.OPENCLAW_DISABLE_AUTO_TITLE = previousDisableEnv;
+    } else {
+      delete process.env.OPENCLAW_DISABLE_AUTO_TITLE;
+    }
+  });
+
+  it("is disabled by default when config and env are omitted", () => {
+    delete process.env.OPENCLAW_ENABLE_AUTO_TITLE;
+    delete process.env.OPENCLAW_DISABLE_AUTO_TITLE;
+    expect(isDashboardSessionTitleEnabled()).toBe(false);
+    expect(isDashboardSessionTitleEnabled({} as OpenClawConfig)).toBe(false);
+  });
+
+  it("is enabled via config ui.autoTitle", () => {
+    delete process.env.OPENCLAW_ENABLE_AUTO_TITLE;
+    delete process.env.OPENCLAW_DISABLE_AUTO_TITLE;
+    expect(isDashboardSessionTitleEnabled({ ui: { autoTitle: true } } as OpenClawConfig)).toBe(
+      true,
+    );
+  });
+
+  it("is enabled via OPENCLAW_ENABLE_AUTO_TITLE environment variable", () => {
+    delete process.env.OPENCLAW_DISABLE_AUTO_TITLE;
+    process.env.OPENCLAW_ENABLE_AUTO_TITLE = "1";
+    expect(isDashboardSessionTitleEnabled()).toBe(true);
+  });
+
+  it("disables via OPENCLAW_DISABLE_AUTO_TITLE even if config has autoTitle enabled", () => {
+    process.env.OPENCLAW_DISABLE_AUTO_TITLE = "1";
+    expect(isDashboardSessionTitleEnabled({ ui: { autoTitle: true } } as OpenClawConfig)).toBe(
+      false,
+    );
+  });
+
+  it("skips title generation by default without making any model request", async () => {
+    delete process.env.OPENCLAW_ENABLE_AUTO_TITLE;
+    delete process.env.OPENCLAW_DISABLE_AUTO_TITLE;
+    const defaultCfg = {
+      agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
+    } as OpenClawConfig;
+
+    expect(
+      isDashboardSessionTitleCandidate({
+        sessionKey: "agent:main:dashboard:chat-1",
+        userMessage: "Help me plan the release",
+        cfg: defaultCfg,
+      }),
+    ).toBe(false);
+
+    await expect(
+      maybeGenerateDashboardSessionTitle({
+        ...titleParams(),
+        cfg: defaultCfg,
+      }),
+    ).resolves.toBe(false);
+
+    expect(generateConversationLabelWithFallback).not.toHaveBeenCalled();
+    expect(updateSessionEntry).not.toHaveBeenCalled();
+
+    await expect(
+      prepareDashboardSessionTitle({
+        cfg: defaultCfg,
+        agentId: "main",
+        userMessage: "Help me plan the release",
+      }),
+    ).resolves.toBeNull();
   });
 });
