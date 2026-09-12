@@ -1745,6 +1745,7 @@ test("createGatewaySession forwards its commit guard into main-session reset", a
 });
 
 test("chat.send fences dashboard title persistence from concurrent session deletion", async () => {
+  process.env.OPENCLAW_ENABLE_AUTO_TITLE = "1";
   const { storePath } = await createSessionStoreDir();
   const { ws } = await openClient();
   let releaseDrainProbe = () => {};
@@ -1840,6 +1841,7 @@ test("chat.send fences dashboard title persistence from concurrent session delet
     expect(deleted.payload?.deleted).toBe(true);
     expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toBeUndefined();
   } finally {
+    delete process.env.OPENCLAW_ENABLE_AUTO_TITLE;
     releaseDrainProbe();
     finishDispatch?.();
     finishTitle?.();
@@ -1849,6 +1851,7 @@ test("chat.send fences dashboard title persistence from concurrent session delet
 });
 
 test("chat.send persists a dashboard title while the first turn is still running", async () => {
+  process.env.OPENCLAW_ENABLE_AUTO_TITLE = "1";
   const { storePath } = await createSessionStoreDir();
   const { ws } = await openClient();
   let dispatchFinished = false;
@@ -1883,6 +1886,7 @@ test("chat.send persists a dashboard title while the first turn is still running
     );
     expect(dispatchFinished).toBe(false);
   } finally {
+    delete process.env.OPENCLAW_ENABLE_AUTO_TITLE;
     finishDispatch?.();
     ws.close();
   }

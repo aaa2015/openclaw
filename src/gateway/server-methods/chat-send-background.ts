@@ -7,6 +7,7 @@ import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admi
 import {
   buildDashboardSessionTitleSource,
   isDashboardSessionTitleCandidate,
+  isDashboardSessionTitleEnabled,
   maybeGenerateDashboardSessionTitle,
 } from "../dashboard-session-title.js";
 import { loadSessionEntry } from "../session-utils.js";
@@ -49,6 +50,9 @@ type DashboardSessionTitleRequest = {
 };
 
 export function scheduleChatDashboardSessionTitle(params: DashboardSessionTitleRequest): void {
+  if (!isDashboardSessionTitleEnabled(params.cfg)) {
+    return;
+  }
   scheduleDashboardSessionTitle(params, "session");
 }
 
@@ -64,7 +68,12 @@ export function scheduleCreatedDashboardSessionTitle(
   context: GatewayRequestContext,
   titleSource?: string,
 ): void {
-  if (!created.isNew || created.entry.incognito || !titleSource) {
+  if (
+    !isDashboardSessionTitleEnabled(cfg) ||
+    !created.isNew ||
+    created.entry.incognito ||
+    !titleSource
+  ) {
     return;
   }
   // Creation metadata must not hold the execution lease that cloud dispatch drains.
@@ -88,12 +97,19 @@ function scheduleDashboardSessionTitle(
   params: DashboardSessionTitleRequest,
   admissionScope: "session" | "gateway",
 ): void {
+  if (!isDashboardSessionTitleEnabled(params.cfg)) {
+    return;
+  }
   const titleSource = buildDashboardSessionTitleSource({
     message: params.request.rawMessage,
     attachments: params.request.normalizedAttachments,
   });
   if (
-    !isDashboardSessionTitleCandidate({ sessionKey: params.sessionKey, userMessage: titleSource })
+    !isDashboardSessionTitleCandidate({
+      sessionKey: params.sessionKey,
+      userMessage: titleSource,
+      cfg: params.cfg,
+    })
   ) {
     return;
   }

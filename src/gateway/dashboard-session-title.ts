@@ -119,11 +119,31 @@ function isAutoTitleSessionKey(sessionKey: string): boolean {
   return rest.startsWith("dashboard:") || rest.startsWith("ios-") || rest.startsWith("node-");
 }
 
+export function isDashboardSessionTitleEnabled(cfg?: OpenClawConfig): boolean {
+  if (
+    process.env.OPENCLAW_DISABLE_AUTO_TITLE === "1" ||
+    process.env.OPENCLAW_DISABLE_AUTO_TITLE === "true"
+  ) {
+    return false;
+  }
+  if (
+    process.env.OPENCLAW_ENABLE_AUTO_TITLE === "1" ||
+    process.env.OPENCLAW_ENABLE_AUTO_TITLE === "true"
+  ) {
+    return true;
+  }
+  return Boolean(cfg?.ui?.autoTitle);
+}
+
 /** True when this interactive chat key should receive an automatic topic title. */
 export function isDashboardSessionTitleCandidate(params: {
   sessionKey: string;
   userMessage: string;
+  cfg?: OpenClawConfig;
 }): boolean {
+  if (params.cfg && !isDashboardSessionTitleEnabled(params.cfg)) {
+    return false;
+  }
   const sourceText = params.userMessage.trim();
   return Boolean(
     sourceText && !sourceText.startsWith("/") && isAutoTitleSessionKey(params.sessionKey),
@@ -173,9 +193,13 @@ async function generateDashboardSessionTitle(params: {
   attachments?: readonly ChatAttachment[];
   timeoutMs?: number;
   utilityOnly?: boolean;
+  worktree?: boolean;
   abortSignal?: AbortSignal;
   assertCurrent?: () => void;
 }): Promise<string | null> {
+  if (!isDashboardSessionTitleEnabled(params.cfg) && !params.worktree) {
+    return null;
+  }
   const sourceText = buildDashboardSessionTitleSource({
     message: params.userMessage,
     attachments: params.attachments,
@@ -253,6 +277,9 @@ export async function prepareDashboardSessionTitle(params: {
   abortSignal?: AbortSignal;
   assertCurrent?: () => void;
 }): Promise<string | null> {
+  if (!isDashboardSessionTitleEnabled(params.cfg)) {
+    return null;
+  }
   try {
     return await generateDashboardSessionTitle({ ...params, utilityOnly: true });
   } catch {
@@ -304,11 +331,15 @@ export async function maybeGenerateDashboardSessionTitle(params: {
   currentUserMessage?: string;
   userMessage: string;
 }): Promise<boolean> {
+  if (!isDashboardSessionTitleEnabled(params.cfg)) {
+    return false;
+  }
   const sourceText = params.userMessage.trim();
   if (
     !isDashboardSessionTitleCandidate({
       sessionKey: params.sessionKey,
       userMessage: sourceText,
+      cfg: params.cfg,
     })
   ) {
     return false;
@@ -331,6 +362,9 @@ export async function maybeGenerateSessionTitle(params: {
   worktree?: boolean;
   commitGuard?: () => void;
 }): Promise<SessionTitleAttempt> {
+  if (!isDashboardSessionTitleEnabled(params.cfg) && !params.worktree) {
+    return { kind: "skipped" };
+  }
   const sessionKey = resolveStoredSessionKeyForAgentStore(params);
   const scope = { agentId: params.agentId, sessionKey, storePath: params.storePath };
   const entry = loadSessionEntry(scope);
@@ -377,7 +411,9 @@ export async function maybeGenerateSessionTitle(params: {
           agentId: params.agentId,
           entry: params.entry ?? entry,
           userMessage: sourceText,
-          ...(params.worktree ? { timeoutMs: WORKTREE_SESSION_TITLE_ATTEMPT_TIMEOUT_MS } : {}),
+          ...(params.worktree
+            ? { timeoutMs: WORKTREE_SESSION_TITLE_ATTEMPT_TIMEOUT_MS, worktree: true }
+            : {}),
         });
         const displayName = await (params.worktree
           ? withTimeout(generation, WORKTREE_SESSION_TITLE_TIMEOUT_MS, "worktree title generation")

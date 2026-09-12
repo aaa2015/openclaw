@@ -55,6 +55,7 @@ async function withTitleProvider(
       async (baseUrl) => {
         const cfg: OpenClawConfig = {
           plugins: { enabled: false },
+          ui: { autoTitle: true },
           agents: {
             defaults: {
               workspace: state.workspaceDir,
