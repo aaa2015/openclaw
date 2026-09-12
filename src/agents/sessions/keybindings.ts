@@ -68,6 +68,7 @@ declare module "@earendil-works/pi-tui" {
 /** Complete keybinding definition map consumed by the TUI keybinding manager. */
 const KEYBINDINGS = {
   ...TUI_KEYBINDINGS,
+  "tui.input.submit": { defaultKeys: ["enter", "ctrl+s"], description: "Submit input" },
   "app.interrupt": { defaultKeys: "escape", description: "Cancel or abort" },
   "app.clear": { defaultKeys: "ctrl+c", description: "Clear editor" },
   "app.exit": { defaultKeys: "ctrl+d", description: "Exit when editor is empty" },

@@ -62,9 +62,10 @@ export function createComposerKeyDownHandler({
         event.preventDefault();
         goalComposer.cancel();
       } else if (
-        event.key === "Enter" &&
-        !event.shiftKey &&
-        (sendShortcut === "enter" || event.metaKey || event.ctrlKey) &&
+        ((event.key === "Enter" &&
+          !event.shiftKey &&
+          (sendShortcut === "enter" || event.metaKey || event.ctrlKey)) ||
+          ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s")) &&
         canSubmitDraft(target.value)
       ) {
         event.preventDefault();
@@ -132,8 +133,12 @@ export function createComposerKeyDownHandler({
       return;
     }
 
+    const isCtrlS = (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s";
     const sendShortcutMatches = sendShortcut === "enter" || event.metaKey || event.ctrlKey;
-    if (event.key === "Enter" && !event.shiftKey && sendShortcutMatches) {
+    if ((event.key === "Enter" && !event.shiftKey && sendShortcutMatches) || isCtrlS) {
+      if (isCtrlS) {
+        event.preventDefault();
+      }
       // Holding send is one action, even after the draft clears into the queue.
       if (event.repeat) {
         event.preventDefault();
@@ -169,7 +174,9 @@ export function createComposerKeyDownHandler({
       event.preventDefault();
       commitDraft(target.value);
       const followUpModeOverride =
-        (event.metaKey || event.ctrlKey) && !event.altKey ? alternateFollowUpMode : undefined;
+        (event.metaKey || event.ctrlKey) && !event.altKey && !isCtrlS
+          ? alternateFollowUpMode
+          : undefined;
       void props.onSend(followUpModeOverride, event);
       syncDraftAfterSend(target);
     }

@@ -390,6 +390,14 @@ function handleComposerKeydown(
   ) {
     return;
   }
+  const isCtrlS = (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s";
+  if (isCtrlS) {
+    event.preventDefault();
+    if (options.canSubmit || options.submitDisabledReason !== undefined) {
+      submitNewSession(options);
+    }
+    return;
+  }
   if (event.key !== "Enter") {
     return;
   }

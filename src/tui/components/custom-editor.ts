@@ -130,14 +130,19 @@ export class CustomEditor extends Editor {
       }
     }
 
-    if (keybindings.matches(data, "tui.input.submit") && this.onSubmit) {
+    const isCtrlS = matchesKey(data, Key.ctrl("s"));
+    if ((keybindings.matches(data, "tui.input.submit") || isCtrlS) && this.onSubmit) {
       const expandedText = this.getExpandedText();
       const onSubmit = this.onSubmit;
       // pi-tui may complete a command before submitting. Keep that completed text
       // inside the original whitespace boundary so trimming cannot change its action.
       this.onSubmit = (text) => onSubmit(expandedText.replace(expandedText.trim(), () => text));
       try {
-        super.handleInput(data);
+        if (isCtrlS && !keybindings.matches(data, "tui.input.submit")) {
+          (this as unknown as { submitValue: () => void }).submitValue();
+        } else {
+          super.handleInput(data);
+        }
       } finally {
         this.onSubmit = onSubmit;
       }
