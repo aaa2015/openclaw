@@ -144,6 +144,17 @@ private final class QuickChatNSTextView: NSTextView {
             return
         }
 
+        let isS = event.keyCode == 1 || event.charactersIgnoringModifiers?.lowercased() == "s"
+        let isCtrlS = isS && (event.modifierFlags.contains(.control) || event.modifierFlags.contains(.command))
+        if isCtrlS {
+            guard !self.hasMarkedText() else {
+                super.keyDown(with: event)
+                return
+            }
+            self.onSubmit?(false)
+            return
+        }
+
         guard event.keyCode == 36 || event.keyCode == 76 else {
             super.keyDown(with: event)
             return

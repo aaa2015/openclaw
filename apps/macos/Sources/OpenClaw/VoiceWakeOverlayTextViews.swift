@@ -181,8 +181,18 @@ private final class TranscriptNSTextView: NSTextView {
     override func keyDown(with event: NSEvent) {
         let isReturn = event.keyCode == 36
         let isEscape = event.keyCode == 53
+        let isS = event.keyCode == 1 || event.charactersIgnoringModifiers?.lowercased() == "s"
+        let isCtrlS = isS && (event.modifierFlags.contains(.control) || event.modifierFlags.contains(.command))
         if isEscape {
             self.onEscape?()
+            return
+        }
+        if isCtrlS {
+            if self.hasMarkedText() {
+                super.keyDown(with: event)
+                return
+            }
+            self.onSend?()
             return
         }
         // Keep IME candidate confirmation behavior: Return should commit marked text first.

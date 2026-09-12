@@ -237,4 +237,18 @@ describe("CustomEditor", () => {
     expect(getExpandedText).not.toHaveBeenCalled();
     expect(editor.getText()).toBe("draftx");
   });
+
+  it("submits input when Ctrl+S is pressed", () => {
+    const tui = { requestRender: vi.fn() } as unknown as TUI;
+    const editor = new CustomEditor(tui, editorTheme);
+    const onSubmit = vi.fn();
+    editor.onSubmit = onSubmit;
+    editor.setText("message sent via ctrl+s");
+
+    // Ctrl+S key in terminal is \x13
+    editor.handleInput("\x13");
+
+    expect(onSubmit).toHaveBeenCalledWith("message sent via ctrl+s");
+    expect(editor.getText()).toBe("");
+  });
 });

@@ -18,8 +18,9 @@ afterEach(async () => {
   await resetComposerFixture();
 });
 
-function pressComposerEnter(
+function pressComposerKey(
   container: Element,
+  key: string,
   modifiers: Pick<KeyboardEventInit, "altKey" | "ctrlKey" | "metaKey" | "shiftKey" | "repeat"> = {},
 ) {
   const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
@@ -29,11 +30,18 @@ function pressComposerEnter(
   const event = new KeyboardEvent("keydown", {
     bubbles: true,
     cancelable: true,
-    key: "Enter",
+    key,
     ...modifiers,
   });
   textarea.dispatchEvent(event);
   return event;
+}
+
+function pressComposerEnter(
+  container: Element,
+  modifiers: Pick<KeyboardEventInit, "altKey" | "ctrlKey" | "metaKey" | "shiftKey" | "repeat"> = {},
+) {
+  return pressComposerKey(container, "Enter", modifiers);
 }
 
 describe("renderChatComposer controls", () => {
@@ -551,6 +559,17 @@ describe("renderChatComposer controls", () => {
       expect(onSend).toHaveBeenCalledWith(undefined, action);
     },
   );
+
+  it.each([
+    { name: "Control+s", modifiers: { ctrlKey: true } },
+    { name: "Meta+s", modifiers: { metaKey: true } },
+  ])("submits draft on $name and prevents browser save default", ({ modifiers }) => {
+    const onSend = vi.fn();
+    const { container } = renderComposer({ draft: "Submit with ctrl+s", onSend });
+    const event = pressComposerKey(container, "s", modifiers);
+    expect(event.defaultPrevented).toBe(true);
+    expect(onSend).toHaveBeenCalledWith(undefined, event);
+  });
 
   it("keeps empty modified Enter on the existing empty-draft path", () => {
     const onSend = vi.fn();
