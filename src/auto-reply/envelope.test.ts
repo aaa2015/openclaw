@@ -239,4 +239,23 @@ describe("formatInboundEnvelope", () => {
       userTimezone: "Europe/Vienna",
     });
   });
+
+  it("respects envelope.includeTimestamp: false to stabilize prompt caching", () => {
+    const options = resolveEnvelopeFormatOptions({
+      agents: {
+        defaults: {
+          envelope: {
+            includeTimestamp: false,
+          },
+          userTimezone: "Asia/Shanghai",
+        },
+      },
+    });
+    expect(options).toEqual({
+      timezone: "Asia/Shanghai",
+      includeTimestamp: false,
+      includeElapsed: true,
+      userTimezone: "Asia/Shanghai",
+    });
+  });
 });

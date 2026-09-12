@@ -436,6 +436,17 @@ describe("agent defaults schema", () => {
     expect(result.embeddedAgent?.projectSettingsPolicy).toBe("sanitize");
   });
 
+  it("accepts envelope options for prompt cache stabilization", () => {
+    const result = AgentDefaultsSchema.parse({
+      envelope: {
+        includeTimestamp: false,
+        includeElapsed: false,
+      },
+    })!;
+    expect(result.envelope?.includeTimestamp).toBe(false);
+    expect(result.envelope?.includeElapsed).toBe(false);
+  });
+
   it.each([
     "off",
     "minimal",

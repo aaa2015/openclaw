@@ -2344,6 +2344,11 @@ describe("timestampOptsFromConfig", () => {
     // Timestamp injection is fixed on even when other agent defaults exist.
     expect(timestampOptsFromConfig({} as OpenClawConfig).includeTimestamp).toBe(true);
     expect(timestampOptsFromConfig(upgradedConfigWithExistingDefaults).includeTimestamp).toBe(true);
+    expect(
+      timestampOptsFromConfig({
+        agents: { defaults: { envelope: { includeTimestamp: false } } },
+      } as OpenClawConfig).includeTimestamp,
+    ).toBe(false);
   });
 });
 

@@ -87,6 +87,13 @@ export const AgentDefaultsBaseSchema = z
       .strict()
       .optional(),
     userTimezone: z.string().optional(),
+    envelope: z
+      .object({
+        includeTimestamp: z.boolean().optional(),
+        includeElapsed: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     startupContext: z
       .object({
         enabled: z.boolean().optional(),

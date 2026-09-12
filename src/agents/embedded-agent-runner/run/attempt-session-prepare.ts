@@ -453,7 +453,8 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
   const boundaryTimezone = preserveExactPrompt
     ? undefined
     : resolveUserTimezone(attempt.config?.agents?.defaults?.userTimezone);
-  const includeBoundaryTimestamp = !preserveExactPrompt;
+  const includeBoundaryTimestamp =
+    !preserveExactPrompt && attempt.config?.agents?.defaults?.envelope?.includeTimestamp !== false;
   let currentUserTimestampOverride: CurrentUserTimestampOverride | undefined;
   const buildBoundaryOptions = (): LlmBoundaryOptions => {
     if (preserveExactPrompt) {
