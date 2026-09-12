@@ -74,8 +74,8 @@ export function resolveEnvelopeFormatOptions(cfg?: OpenClawConfig): EnvelopeForm
   const configuredTimezone = normalizeOptionalString(defaults?.userTimezone);
   return {
     timezone: configuredTimezone ? (resolveTimezone(configuredTimezone) ?? "local") : undefined,
-    includeTimestamp: true,
-    includeElapsed: true,
+    includeTimestamp: defaults?.envelope?.includeTimestamp !== false,
+    includeElapsed: defaults?.envelope?.includeElapsed !== false,
     userTimezone: defaults?.userTimezone,
   };
 }
