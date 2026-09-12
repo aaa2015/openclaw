@@ -10,6 +10,7 @@ import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shar
 import {
   getSubagentDepth,
   isCronSessionKey,
+  parseCacheStableSessionScope,
   parseCronRunScopeSuffix,
   parseThreadSessionSuffix,
 } from "../sessions/session-key-utils.js";
@@ -279,6 +280,61 @@ describe("cron run scope suffix parsing", () => {
     expect(parseCronRunScopeSuffix(undefined)).toEqual({
       baseSessionKey: undefined,
       runId: undefined,
+    });
+  });
+});
+
+describe("cache-stable session scope parsing", () => {
+  it("normalizes dashboard sessions with random UUIDs to base dashboard key", () => {
+    expect(
+      parseCacheStableSessionScope("agent:main:dashboard:43516a37-057d-45ca-b1d6-444a737fba4f"),
+    ).toEqual({
+      baseSessionKey: "agent:main:dashboard",
+      isVolatile: true,
+    });
+  });
+
+  it("normalizes incognito dashboard sessions to base incognito key", () => {
+    expect(
+      parseCacheStableSessionScope(
+        "agent:main:dashboard:incognito-f49a82c6-3023-41a4-a957-c81121d50c70",
+      ),
+    ).toEqual({
+      baseSessionKey: "agent:main:dashboard:incognito",
+      isVolatile: true,
+    });
+  });
+
+  it("normalizes unscoped dashboard sessions", () => {
+    expect(parseCacheStableSessionScope("dashboard:random-chat-uuid")).toEqual({
+      baseSessionKey: "dashboard",
+      isVolatile: true,
+    });
+  });
+
+  it("normalizes isolated cron runs using parseCronRunScopeSuffix", () => {
+    expect(parseCacheStableSessionScope("agent:work:cron:nightly-job:run:abc-123")).toEqual({
+      baseSessionKey: "agent:work:cron:nightly-job",
+      runId: "abc-123",
+      isVolatile: true,
+    });
+  });
+
+  it("preserves static session keys untouched with isVolatile=false", () => {
+    expect(parseCacheStableSessionScope("agent:main:main")).toEqual({
+      baseSessionKey: "agent:main:main",
+      isVolatile: false,
+    });
+    expect(parseCacheStableSessionScope("agent:main:telegram:direct:12345")).toEqual({
+      baseSessionKey: "agent:main:telegram:direct:12345",
+      isVolatile: false,
+    });
+  });
+
+  it("returns undefined for empty input", () => {
+    expect(parseCacheStableSessionScope(undefined)).toEqual({
+      baseSessionKey: undefined,
+      isVolatile: false,
     });
   });
 });

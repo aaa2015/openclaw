@@ -26,9 +26,15 @@ type ParsedSessionDeliveryRoute = {
   threadId?: string;
 };
 
-type ParsedCronRunScopeSuffix = {
+export type ParsedCronRunScopeSuffix = {
   baseSessionKey: string | undefined;
   runId: string | undefined;
+};
+
+export type ParsedCacheStableSessionScope = {
+  baseSessionKey: string | undefined;
+  runId?: string | undefined;
+  isVolatile: boolean;
 };
 
 export type RawSessionConversationRef = {
@@ -282,6 +288,38 @@ export function parseCronRunScopeSuffix(
     baseSessionKey: raw.slice(0, markerIndex),
     runId: raw.slice(markerIndex + runMarker.length),
   };
+}
+
+/**
+ * Resolves a cache-stable base session key and volatility flag for prompt rendering.
+ *
+ * For isolated cron runs (`agent:<id>:cron:<job>:run:<runId>`), strips the volatile per-run id.
+ * For interactive dashboard sessions (`agent:<id>:dashboard:<uuid>` or `dashboard:<uuid>`),
+ * strips the per-session UUID so that prompts remain byte-identical across chat sessions,
+ * allowing local and remote models to reuse prefix KV caches.
+ */
+export function parseCacheStableSessionScope(
+  sessionKey: string | undefined | null,
+): ParsedCacheStableSessionScope {
+  const raw = normalizeOptionalString(sessionKey);
+  if (!raw) {
+    return { baseSessionKey: undefined, isVolatile: false };
+  }
+  const cron = parseCronRunScopeSuffix(raw);
+  if (cron.runId !== undefined) {
+    return { baseSessionKey: cron.baseSessionKey, runId: cron.runId, isVolatile: true };
+  }
+  const parsed = parseAgentSessionKey(raw);
+  const rest = parsed?.rest ?? raw;
+  const lowerRest = rest.toLowerCase();
+  if (lowerRest.startsWith("dashboard:")) {
+    const isIncognito =
+      lowerRest.startsWith("dashboard:incognito-") || lowerRest.startsWith("dashboard:incognito:");
+    const baseTail = isIncognito ? "dashboard:incognito" : "dashboard";
+    const base = parsed ? `agent:${parsed.agentId}:${baseTail}` : baseTail;
+    return { baseSessionKey: base, isVolatile: true };
+  }
+  return { baseSessionKey: raw, isVolatile: false };
 }
 
 export function isCronSessionKey(sessionKey: string | undefined | null): boolean {

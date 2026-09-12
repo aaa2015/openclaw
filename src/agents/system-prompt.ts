@@ -38,7 +38,7 @@ import {
   type PreparedMemoryPromptSection,
 } from "../plugins/memory-state.js";
 import type { AgentPromptSurfaceKind } from "../plugins/types.js";
-import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
+import { parseCacheStableSessionScope } from "../sessions/session-key-utils.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import type { BootstrapMode } from "./bootstrap-mode.js";
@@ -1570,17 +1570,24 @@ function buildRuntimeLine(
 ): string {
   const normalizedRuntimeCapabilities = normalizePromptCapabilityIds(runtimeCapabilities);
   // Automatic literal-prefix caches include Runtime before the tool catalog. Rendering an
-  // isolated cron's volatile `:run:<id>` scope there defeats reuse across runs of the same job.
-  // Render the stable base key and drop the per-run session id it duplicates.
-  const { baseSessionKey, runId } = parseCronRunScopeSuffix(runtimeInfo?.sessionKey);
+  // isolated cron's volatile `:run:<id>` scope or a dashboard session's random UUID there
+  // defeats reuse across sessions/runs.
+  // Render the stable base key and drop volatile per-run / per-chat session ids.
+  const { baseSessionKey, runId, isVolatile } = parseCacheStableSessionScope(
+    runtimeInfo?.sessionKey,
+  );
   const stableSessionId =
-    runtimeInfo?.sessionId && runtimeInfo.sessionId !== runId ? runtimeInfo.sessionId : undefined;
+    runtimeInfo?.sessionId && (runId !== undefined ? runtimeInfo.sessionId !== runId : !isVolatile)
+      ? runtimeInfo.sessionId
+      : undefined;
   return `Runtime: ${[
     runtimeInfo?.agentName ? `name=${runtimeInfo.agentName}` : "",
     runtimeInfo?.agentId ? `agent=${runtimeInfo.agentId}` : "",
     baseSessionKey ? `session=${sanitizeForPromptLiteral(baseSessionKey)}` : "",
     stableSessionId ? `sessionId=${sanitizeForPromptLiteral(stableSessionId)}` : "",
-    runtimeInfo?.sessionUrl ? `sessionUrl=${sanitizeForPromptLiteral(runtimeInfo.sessionUrl)}` : "",
+    !isVolatile && runtimeInfo?.sessionUrl
+      ? `sessionUrl=${sanitizeForPromptLiteral(runtimeInfo.sessionUrl)}`
+      : "",
     runtimeInfo?.host ? `host=${runtimeInfo.host}` : "",
     runtimeInfo?.repoRoot ? `repo=${runtimeInfo.repoRoot}` : "",
     runtimeInfo?.os

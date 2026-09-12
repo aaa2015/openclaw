@@ -2288,6 +2288,43 @@ describe("buildAgentSystemPrompt", () => {
     expect(runA.prompt).toBe(runB.prompt);
   });
 
+  it("keeps the runtime line cache-stable across dashboard chat sessions", () => {
+    const buildForDashboard = (chatUuid: string) => {
+      const { runtimeInfo } = buildSystemPromptParams({
+        config: { gateway: { publicOrigin: "https://gateway.example" } },
+        agentId: "main",
+        runtime: {
+          sessionKey: `agent:main:dashboard:${chatUuid}`,
+          sessionId: chatUuid,
+          host: "macstudio",
+          os: "macOS",
+          arch: "arm64",
+          node: "v26",
+          model: "local/glm-5.3-flash",
+        },
+      });
+      return {
+        runtimeInfo,
+        prompt: buildAgentSystemPrompt({
+          workspaceDir: "/tmp/openclaw",
+          runtimeInfo,
+        }),
+      };
+    };
+    const chatA = buildForDashboard("1c98e434-0000-0000-0000-000000000001");
+    const chatB = buildForDashboard("5a259004-0000-0000-0000-000000000002");
+
+    expect(chatA.prompt).not.toContain("sessionUrl=");
+    expect(chatB.prompt).not.toContain("sessionUrl=");
+    expect(chatA.prompt).toContain("session=agent:main:dashboard");
+    expect(chatA.prompt).not.toContain("1c98e434");
+    expect(chatB.prompt).not.toContain("5a259004");
+    expect(chatA.prompt).not.toContain("sessionId=");
+    expect(chatB.prompt).not.toContain("sessionId=");
+    // Two different dashboard chats render identical bytes, reusing prefix KV cache!
+    expect(chatA.prompt).toBe(chatB.prompt);
+  });
+
   it("preserves a stable session id that is not the run-scope id", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
