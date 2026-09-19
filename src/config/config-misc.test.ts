@@ -522,6 +522,17 @@ describe("ui.seamColor", () => {
   });
 });
 
+describe("ui.autoTitle", () => {
+  it("accepts a boolean toggle", () => {
+    expect(validateConfigObject({ ui: { autoTitle: true } }).ok).toBe(true);
+    expect(validateConfigObject({ ui: { autoTitle: false } }).ok).toBe(true);
+  });
+
+  it("rejects non-boolean values", () => {
+    expect(validateConfigObject({ ui: { autoTitle: "yes" } }).ok).toBe(false);
+  });
+});
+
 describe("ui.prefs.accent", () => {
   it.each([
     ["lowercase hex", "#ff5c5c", true],
