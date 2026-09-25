@@ -143,7 +143,7 @@ function validateProducer(producer, { repository, toolingSha, jobName }) {
   return producer;
 }
 
-function validateCorePackages(corePackages, version) {
+export function validatePreparedCorePackages(corePackages, version) {
   if (!Array.isArray(corePackages) || corePackages.length > CORE_PACKAGES.length) {
     throw new Error("Invalid prepared core package inventory.");
   }
@@ -208,7 +208,7 @@ export function validatePreparedNpmBundleDescriptor({
   fileName(pkg.fileName);
   digest(pkg.sha256, "root tarball digest");
   digest(descriptor.manifestSha256, "package manifest digest");
-  validateCorePackages(descriptor.corePackages, pkg.version);
+  validatePreparedCorePackages(descriptor.corePackages, pkg.version);
   if (descriptor.corePackages.some((entry) => entry.tarballName === pkg.fileName)) {
     throw new Error("Prepared root and core tarball filenames overlap.");
   }
@@ -713,17 +713,29 @@ export function prepareNpmPackageBundle({
     );
   },
   runPack = (directory, destination) =>
-    execFileSync("pnpm", ["--dir", directory, "pack", "--pack-destination", destination], {
-      env: {
-        ...process.env,
-        OPENCLAW_PREPACK_PREPARED: "1",
-        ...(/^[a-f0-9]{40}$/u.test(releaseRef)
-          ? { OPENCLAW_PREPACK_ALLOW_UNRELEASED_CHANGELOG: "1" }
-          : {}),
+    // Bundled dependencies only pack under the hoisted linker; prepack scripts stay enabled.
+    execFileSync(
+      "pnpm",
+      [
+        "--dir",
+        directory,
+        "pack",
+        "--config.node-linker=hoisted",
+        "--pack-destination",
+        destination,
+      ],
+      {
+        env: {
+          ...process.env,
+          OPENCLAW_PREPACK_PREPARED: "1",
+          ...(/^[a-f0-9]{40}$/u.test(releaseRef)
+            ? { OPENCLAW_PREPACK_ALLOW_UNRELEASED_CHANGELOG: "1" }
+            : {}),
+        },
+        stdio: "inherit",
+        timeout: 30 * 60 * 1000,
       },
-      stdio: "inherit",
-      timeout: 30 * 60 * 1000,
-    }),
+    ),
 }) {
   const { sourceSha, root, releaseTag, baseTag } = readReleaseSourceIdentity({
     sourceDir,

@@ -52,7 +52,6 @@ import {
 import { isPinnableSessionEntry } from "../config/sessions/session-pin-policy.js";
 import { projectCanonicalSessionEntryShape } from "../config/sessions/store-entry-shape.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeExecTarget } from "../infra/exec-approvals.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import {
   isSubagentSessionKey,
@@ -85,8 +84,10 @@ import {
 import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
 import type { UserModelAccountSelection } from "./model-account-authority.js";
 import { resolveSessionPatchModelSelection } from "./server-methods/sessions-patch-model-selection.js";
+import { applySessionExecutionSettings } from "./session-execution-settings.js";
 import {
   isAgentSessionModelPatchOrigin,
+  isSessionStatusModelPatchOrigin,
   snapshotAgentModelFallback,
 } from "./session-model-patch-origin.js";
 import { normalizeSessionToolOverrides } from "./session-tool-overrides.js";
@@ -502,42 +503,9 @@ function* projectSessionPatchSteps(
     }
   }
 
-  if ("execHost" in patch) {
-    const raw = patch.execHost;
-    if (raw === null) {
-      delete next.execHost;
-    } else if (raw !== undefined) {
-      const normalized = normalizeExecTarget(raw) ?? undefined;
-      if (!normalized) {
-        return invalid('invalid execHost (use "auto"|"sandbox"|"gateway"|"node")');
-      }
-      next.execHost = normalized;
-    }
-  }
-
-  if ("execNode" in patch) {
-    if (patch.execNode === null) {
-      delete next.execNode;
-      delete next.execCwd;
-      if (next.execHost === "node") {
-        delete next.execHost;
-      }
-    } else if (patch.execNode !== undefined) {
-      const trimmed = normalizeOptionalString(patch.execNode) ?? "";
-      if (!trimmed) {
-        return invalid("invalid execNode: empty");
-      }
-      if (trimmed !== next.execNode) {
-        // A cwd belongs to one node's filesystem; never carry it across node bindings.
-        delete next.execCwd;
-      }
-      next.execNode = trimmed;
-    }
-  }
-  if (patch.permissionMode === null) {
-    delete next.permissionMode;
-  } else if (patch.permissionMode !== undefined) {
-    next.permissionMode = patch.permissionMode;
+  const executionError = applySessionExecutionSettings(next, patch);
+  if (executionError) {
+    return invalid(executionError);
   }
   if (
     "agentRuntime" in patch &&
@@ -548,13 +516,19 @@ function* projectSessionPatchSteps(
   if (patch.agentRuntime === null) {
     applyModelRuntimeDirective(next, { kind: "clear" });
   }
+  if (typeof patch.nativeRuntimeConsent === "string" && typeof patch.model !== "string") {
+    yield* loadPreparedModelCatalogForPatch();
+  }
   if ("model" in patch) {
+    const statusModelPatch = isSessionStatusModelPatchOrigin();
     const agentModelFallback = isAgentSessionModelPatchOrigin()
       ? next.modelFallback?.source === "agent-patch"
         ? { ...next.modelFallback, ts: Math.max(now, next.modelFallback.ts + 1) }
         : snapshotAgentModelFallback(cfg, next, sessionAgentId, now)
       : undefined;
-    delete next.modelFallback;
+    if (!statusModelPatch) {
+      delete next.modelFallback;
+    }
     const raw = patch.model;
     let selection: (ModelRef & { profile?: string; isDefault: boolean }) | undefined;
     if (raw === null) {
@@ -579,7 +553,8 @@ function* projectSessionPatchSteps(
         agentId: sessionAgentId,
         catalog,
         raw: trimmed,
-        defaultProvider: resolvedDefault.provider,
+        defaultProvider:
+          (statusModelPatch && next.providerOverride?.trim()) || resolvedDefault.provider,
         defaultModel: resolvedDefault.model,
         subagentModelHint,
         preparedModelSelection: params.preparedModelSelection,
@@ -655,14 +630,14 @@ function* projectSessionPatchSteps(
         entry: next,
         currentProvider: next.providerOverride ?? next.modelProvider ?? resolvedDefault.provider,
         selection,
-        explicitDefaultSelection: raw === null,
+        explicitDefaultSelection: raw === null || (statusModelPatch && selection.isDefault),
         profileOverride: selection.profile,
         ...(params.providerAuthMetadataSnapshot
           ? { metadataSnapshot: params.providerAuthMetadataSnapshot }
           : {}),
-        markLiveSwitchPending: raw !== null,
+        markLiveSwitchPending: statusModelPatch || raw !== null,
       });
-      if (raw === null) {
+      if (raw === null && !statusModelPatch) {
         delete next.liveModelSwitchPending;
       }
     }

@@ -323,9 +323,16 @@ it.each(
       const victim = { sessionKey: "agent:main:age-worker-victim", storePath };
       const policy = resolveMaintenanceConfigFromInput({
         mode: "enforce",
-        maxEntries: 100,
+        maxEntries: 1,
         pruneAfter: "1s",
+        preserveRecent: "1h",
       });
+      // Cap pressure requires Worker admission even with a warm age fact. Recent
+      // rows remain protected until the injected backdate/restore makes the victim old.
+      replaceSessionEntrySync(
+        { sessionKey: "agent:main:age-worker-pressure", storePath },
+        { sessionId: "pressure", updatedAt: Date.now() },
+      );
       replaceSessionEntrySync(active, { sessionId: "active", updatedAt: Date.now() });
       replaceSessionEntrySync(victim, {
         sessionId: "victim",
@@ -363,7 +370,7 @@ it.each(
       });
       const withWorker = reclamationWorker.withSqliteReclamationWorker;
       vi.spyOn(reclamationWorker, "withSqliteReclamationWorker").mockImplementation(
-        (options, claim, run, assertCurrent) =>
+        (options, claim, run, assertCurrent, signal) =>
           withWorker(
             options,
             claim,
@@ -400,6 +407,7 @@ it.each(
               }
             },
             assertCurrent,
+            signal,
           ),
       );
       const adoptedAfterMutation: Array<ageFacts.SessionEntryMaintenanceAgeFact | undefined> = [];
@@ -445,7 +453,7 @@ it("adopts age facts before synchronous publication reentry", async () => {
     const policy = resolveMaintenanceConfigFromInput({
       mode: "enforce",
       maxEntries: 100,
-      pruneAfter: "1s",
+      pruneAfter: "1d",
     });
     replaceSessionEntrySync(active, { sessionId: "active", updatedAt: Date.now() });
     replaceSessionEntrySync(victim, { sessionId: "victim", updatedAt: Date.now() });
@@ -777,11 +785,13 @@ it("reuses parent cadence facts until their bounded foreign-write recheck", asyn
     } finally {
       foreign.close();
     }
+    const dispatch = vi.spyOn(reclamation, "runSqliteSessionReclamation");
     const unchanged = observeMaintenance();
     await patchSessionEntryCore(active, () => ({ label: "before recheck" }), {
       maintenanceConfig: policy,
     });
     expect((await unchanged).archived).toBe(0);
+    expect(dispatch).not.toHaveBeenCalled();
     expect(ageFacts.readSessionEntryMaintenanceAgeFact(database.db, policy)).toEqual(initial);
     expect(loadSessionEntry(victim)?.archivedAt).toBeUndefined();
     vi.restoreAllMocks();
