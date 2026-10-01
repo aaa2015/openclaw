@@ -10,7 +10,6 @@ import {
   isDashboardSessionTitleEnabled,
   maybeGenerateDashboardSessionTitle,
 } from "../dashboard-session-title.js";
-import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import { emitSessionsChanged } from "./session-change-event.js";
@@ -45,15 +44,17 @@ type DashboardSessionTitleRequest = {
   context: GatewayRequestContext;
   request: Pick<NormalizedChatSendRequest, "normalizedAttachments" | "rawMessage">;
   sessionKey: string;
-  sessionLoadOptions: Parameters<typeof loadSessionEntry>[1];
   storePath: string;
 };
 
-export function scheduleChatDashboardSessionTitle(params: DashboardSessionTitleRequest): void {
+export function scheduleChatDashboardSessionTitle(
+  params: DashboardSessionTitleRequest,
+  ready: Promise<void>,
+): void {
   if (!isDashboardSessionTitleEnabled(params.cfg)) {
     return;
   }
-  scheduleDashboardSessionTitle(params, "session");
+  scheduleDashboardSessionTitle(params, "session", ready);
 }
 
 export function scheduleCreatedDashboardSessionTitle(
@@ -86,7 +87,6 @@ export function scheduleCreatedDashboardSessionTitle(
       context,
       request: { rawMessage: titleSource, normalizedAttachments: [] },
       sessionKey: created.key,
-      sessionLoadOptions: { agentId: created.agentId },
       storePath: created.storePath,
     },
     "gateway",
@@ -96,6 +96,7 @@ export function scheduleCreatedDashboardSessionTitle(
 function scheduleDashboardSessionTitle(
   params: DashboardSessionTitleRequest,
   admissionScope: "session" | "gateway",
+  ready?: Promise<void>,
 ): void {
   if (!isDashboardSessionTitleEnabled(params.cfg)) {
     return;
@@ -115,14 +116,13 @@ function scheduleDashboardSessionTitle(
   }
   void runWithGatewayIndependentRootWorkContinuation(async () => {
     const generateTitle = async () => {
-      const titleEntry = loadSessionEntry(params.sessionKey, params.sessionLoadOptions).entry;
-      if (titleEntry?.sessionId !== params.admittedSessionId) {
-        return;
+      // Retain admission and the caller's context while reply progress releases the gate.
+      if (ready) {
+        await ready;
       }
       const updated = await maybeGenerateDashboardSessionTitle({
         cfg: params.cfg,
         agentId: params.agentId,
-        entry: titleEntry,
         sessionId: params.admittedSessionId,
         sessionKey: params.sessionKey,
         storePath: params.storePath,
