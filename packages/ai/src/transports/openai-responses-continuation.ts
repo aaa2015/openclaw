@@ -596,6 +596,9 @@ export function claimOpenAIResponsesHttpContinuation(
       `[responses] continuation resolve status=${resolved.continuationStatus} ` +
         `warm=${String(previous?.kind === "ready")} ` +
         `prevId=${String(resolved.request.previous_response_id ?? "none")} ` +
+        `cachedInput=${String(previous?.kind === "ready" ? (previous.state.lastRequest.input ?? []).length : 0)} ` +
+        `cachedResp=${String(previous?.kind === "ready" ? previous.state.lastResponseItems.length : 0)} ` +
+        `currentInput=${String((request.input ?? []).length)} ` +
         `session=${params.sessionId}`,
     );
     const fullRequest = resolved.fullRequest ?? request;
