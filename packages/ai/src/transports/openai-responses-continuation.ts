@@ -558,6 +558,14 @@ export function claimOpenAIResponsesHttpContinuation(
       previous?.kind === "ready" ? previous.state : undefined,
       request,
     );
+    // Any non-input field that differs from the cached turn, or a history mismatch, makes the
+    // resolver fall back to full history. That fallback is silent on the wire, so name it.
+    params.log?.info(
+      `[responses] continuation resolve status=${resolved.continuationStatus} ` +
+        `warm=${String(previous?.kind === "ready")} ` +
+        `prevId=${String(resolved.request.previous_response_id ?? "none")} ` +
+        `session=${params.sessionId}`,
+    );
     const fullRequest = resolved.fullRequest ?? request;
     return {
       // Unstored HTTP responses cannot be referenced, but their prompt prefix can still be cached.

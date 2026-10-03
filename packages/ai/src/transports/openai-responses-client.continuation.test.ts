@@ -181,6 +181,13 @@ const unoptedCustomEndpointModel = {
   baseUrl: "https://omniroute.example.com/v1",
 } satisfies Model<"openai-responses">;
 
+// Same explicit opt-in, but the route never emits a reasoning payload (thinking is off).
+// The store policy is then the only thing that can open the continuation gate.
+const nonReasoningCustomEndpointModel = {
+  ...customEndpointModel,
+  reasoning: false,
+} satisfies Model<"openai-responses">;
+
 async function run(
   context: Context,
   options: {
@@ -193,6 +200,8 @@ async function run(
     authProfileId?: string;
     asyncToolExecution?: boolean;
     openclawCodeModeToolSurface?: boolean;
+    /** Omit `reasoningEffort` entirely; exercises routes whose only gate is the store policy. */
+    omitReasoningEffort?: boolean;
   },
   requestModel: Model = model,
 ): Promise<AssistantMessage> {
@@ -202,7 +211,7 @@ async function run(
     cacheRetention: options.cacheRetention,
     transport: options.transport ?? "sse",
     authProfileId: options.authProfileId,
-    reasoningEffort: options.reasoningEffort ?? "low",
+    ...(options.omitReasoningEffort ? {} : { reasoningEffort: options.reasoningEffort ?? "low" }),
     asyncToolExecution: options.asyncToolExecution,
     openclawCodeModeToolSurface: options.openclawCodeModeToolSurface,
     onPayload: options.onPayload,
@@ -362,6 +371,32 @@ describe("native OpenAI Responses SSE continuation", () => {
       { messages: [firstUser, first, userMessage("second question", 2)], tools: [] },
       { onPayload: identity },
       customEndpointModel,
+    );
+
+    expect(sseState.requests[0]).toMatchObject({ store: true });
+    expect(sseState.requests[1]).toMatchObject({ previous_response_id: "resp_1" });
+    expect(sseState.requests[1]?.input).toHaveLength(1);
+  });
+
+  it("engages across turns for an opted-in custom endpoint that carries no reasoning effort", async () => {
+    // The wire body stores the response from the model's own opt-in, so the store policy alone
+    // must open the gate. Reading only the caller's params missed this: the turn then resent
+    // full history on every request instead of continuing.
+    sseState.outcomes.push(
+      sdkCompletion("resp_1", "first answer"),
+      sdkCompletion("resp_2", "second answer"),
+    );
+    const firstUser = userMessage("first question", 1);
+    const identity = (payload: Record<string, unknown>) => payload;
+    const first = await run(
+      { messages: [firstUser], tools: [] },
+      { onPayload: identity, omitReasoningEffort: true },
+      nonReasoningCustomEndpointModel,
+    );
+    await run(
+      { messages: [firstUser, first, userMessage("second question", 2)], tools: [] },
+      { onPayload: identity, omitReasoningEffort: true },
+      nonReasoningCustomEndpointModel,
     );
 
     expect(sseState.requests[0]).toMatchObject({ store: true });
