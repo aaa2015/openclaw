@@ -386,6 +386,7 @@ describe("native OpenAI Responses SSE continuation", () => {
     sseState.outcomes.push(
       sdkCompletion("resp_1", "first answer"),
       sdkCompletion("resp_2", "second answer"),
+      sdkCompletion("resp_3", "third answer"),
     );
     const ephemeral = (n: number) =>
       userMessage(
@@ -395,15 +396,34 @@ describe("native OpenAI Responses SSE continuation", () => {
     const onPayload = (payload: Record<string, unknown>) => ({ ...payload, store: true });
     const firstUser = userMessage("first question", 1);
     const first = await run({ messages: [firstUser, ephemeral(1)], tools: [] }, { onPayload });
+    const secondUser = userMessage("second question", 2);
+    const second = await run(
+      {
+        messages: [firstUser, first, secondUser, ephemeral(2)],
+        tools: [],
+      },
+      { onPayload },
+    );
+    // A second consecutive continuation: a continued turn must leave the cached history in a
+    // state the next turn still lines up with.
     await run(
       {
-        messages: [firstUser, first, userMessage("second question", 2), ephemeral(2)],
+        messages: [
+          firstUser,
+          first,
+          secondUser,
+          ephemeral(2),
+          second,
+          userMessage("third question", 3),
+          ephemeral(3),
+        ],
         tools: [],
       },
       { onPayload },
     );
 
     expect(sseState.requests[1]).toMatchObject({ previous_response_id: "resp_1" });
+    expect(sseState.requests[2]).toMatchObject({ previous_response_id: "resp_2" });
   });
 
   it("engages across turns for an opted-in custom endpoint that carries no reasoning effort", async () => {

@@ -40,13 +40,27 @@ function isEphemeralContextItem(item: unknown): boolean {
   );
 }
 
-/** Drops trailing per-turn context blocks that the next turn never replays. */
-function stripTrailingEphemeralContext(input: readonly unknown[]): unknown[] {
+/** Splits off trailing per-turn context blocks that the next turn never replays. */
+function splitTrailingEphemeralContext(input: readonly unknown[]): {
+  body: unknown[];
+  tail: unknown[];
+} {
   let end = input.length;
   while (end > 0 && isEphemeralContextItem(input[end - 1])) {
     end -= 1;
   }
-  return end === input.length ? [...input] : input.slice(0, end);
+  return end === input.length
+    ? { body: [...input], tail: [] }
+    : { body: input.slice(0, end), tail: input.slice(end) };
+}
+
+/**
+ * Removes every per-turn context block so that item positions line up between the cached
+ * history and the next request. A block is trailing in the cached turn but interior in the
+ * following one, so dropping only trailing blocks still shifts every later position.
+ */
+function withoutEphemeralContext(input: readonly unknown[]): unknown[] {
+  return input.filter((item) => !isEphemeralContextItem(item));
 }
 
 export type ResponsesContinuationRequest = Record<string, unknown> & {
@@ -466,14 +480,17 @@ export function resolveResponsesContinuationRequest(
     return { request, continuationStatus: "request_changed" };
   }
   const currentInput = prepared.input ?? [];
-  // An ephemeral per-turn context block (never replayed on the next turn) must not make the
-  // cached history look changed; compare against the history without a trailing one.
-  const previousInput = stripTrailingEphemeralContext(continuation.lastRequest.input ?? []);
+  // Per-turn context blocks are not history: the copy sent on one turn is never replayed on the
+  // next. Exclude them from every positional comparison on BOTH sides, then put this turn's block
+  // back on the delta so the provider still receives it.
+  const previousInput = withoutEphemeralContext(continuation.lastRequest.input ?? []);
+  const comparableCurrentInput = withoutEphemeralContext(currentInput);
+  const { tail: currentContextTail } = splitTrailingEphemeralContext(currentInput);
   const baselineLength = previousInput.length + continuation.lastResponseItems.length;
-  if (currentInput.length < baselineLength) {
+  if (comparableCurrentInput.length < baselineLength) {
     return { request, continuationStatus: "history_shorter" };
   }
-  const replayedToolRoundInput = currentInput.slice(previousInput.length, baselineLength);
+  const replayedToolRoundInput = comparableCurrentInput.slice(previousInput.length, baselineLength);
   const replayedToolRound = normalizeAssistantReplayInput(replayedToolRoundInput);
   // Replay may keep or omit function_call.id, so compare both cached forms.
   const historyToolRoundUnchanged =
@@ -486,13 +503,16 @@ export function resolveResponsesContinuationRequest(
       normalizeAssistantReplayInput(continuation.lastResponseItems, true, true),
     );
   if (
-    !continuationHistoryMatches(previousInput, currentInput.slice(0, previousInput.length)) ||
+    !continuationHistoryMatches(
+      previousInput,
+      comparableCurrentInput.slice(0, previousInput.length),
+    ) ||
     !historyToolRoundUnchanged
   ) {
     return { request, continuationStatus: "history_changed" };
   }
   const restoredInput = restoreRawCallIdsInDelta(
-    currentInput.slice(baselineLength),
+    comparableCurrentInput.slice(baselineLength),
     continuation.lastResponseItems,
     replayedToolRoundInput,
     continuation.pendingToolCalls ?? [],
@@ -503,7 +523,7 @@ export function resolveResponsesContinuationRequest(
   // Restoration only changes output call IDs on items sliced from current input;
   // unknown or ambiguous IDs reject continuation before this cast.
   // SAFETY: shape preserved by restoreRawCallIdsInDelta as documented above.
-  const restoredResponseInput = restoredInput as ResponseInput;
+  const restoredResponseInput = [...restoredInput, ...currentContextTail] as ResponseInput;
   return {
     request: {
       ...prepared,
