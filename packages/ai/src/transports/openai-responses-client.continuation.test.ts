@@ -378,34 +378,6 @@ describe("native OpenAI Responses SSE continuation", () => {
     expect(sseState.requests[1]?.input).toHaveLength(1);
   });
 
-  it("continues when a per-turn context block is appended but never replayed", async () => {
-    // The runtime appends a per-turn "conversation data" user message (active exec sessions,
-    // active subagents, media tasks). It is ephemeral: the copy sent on turn N is not part of
-    // the history replayed on turn N+1. Comparing raw input positions therefore reports a
-    // history change on every turn and silently resends the whole prompt.
-    sseState.outcomes.push(
-      sdkCompletion("resp_1", "first answer"),
-      sdkCompletion("resp_2", "second answer"),
-    );
-    const ephemeral = (n: number) =>
-      userMessage(
-        `<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nConversation data: "Active exec sessions: none ${n}"`,
-        90 + n,
-      );
-    const onPayload = (payload: Record<string, unknown>) => ({ ...payload, store: true });
-    const firstUser = userMessage("first question", 1);
-    const first = await run({ messages: [firstUser, ephemeral(1)], tools: [] }, { onPayload });
-    await run(
-      {
-        messages: [firstUser, first, userMessage("second question", 2), ephemeral(2)],
-        tools: [],
-      },
-      { onPayload },
-    );
-
-    expect(sseState.requests[1]).toMatchObject({ previous_response_id: "resp_1" });
-  });
-
   it("engages across turns for an opted-in custom endpoint that carries no reasoning effort", async () => {
     // The wire body stores the response from the model's own opt-in, so the store policy alone
     // must open the gate. Reading only the caller's params missed this: the turn then resent

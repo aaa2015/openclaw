@@ -19,36 +19,6 @@ import { sha256Hex } from "./transport-utils.js";
 const HTTP_CONTINUATION_IDLE_TTL_MS = 5 * 60 * 1000;
 const TURN_HEADERS = new Set(["traceparent", "x-openclaw-turn-id", "x-openclaw-turn-attempt"]);
 
-// The runtime appends a per-turn "conversation data" user message (active exec sessions,
-// active subagents, media tasks, inter-session deliveries). It is ephemeral: the copy sent on
-// turn N is not replayed on turn N+1, so it must stay out of the byte-for-byte prefix check.
-const EPHEMERAL_CONTEXT_MARKER = "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>";
-
-function isEphemeralContextItem(item: unknown): boolean {
-  if (!isRecord(item) || item.type !== "message" || item.role !== "user") {
-    return false;
-  }
-  const content = item.content;
-  return (
-    Array.isArray(content) &&
-    content.some(
-      (part) =>
-        isRecord(part) &&
-        typeof part.text === "string" &&
-        part.text.includes(EPHEMERAL_CONTEXT_MARKER),
-    )
-  );
-}
-
-/** Drops trailing per-turn context blocks that the next turn never replays. */
-function stripTrailingEphemeralContext(input: readonly unknown[]): unknown[] {
-  let end = input.length;
-  while (end > 0 && isEphemeralContextItem(input[end - 1])) {
-    end -= 1;
-  }
-  return end === input.length ? [...input] : input.slice(0, end);
-}
-
 export type ResponsesContinuationRequest = Record<string, unknown> & {
   input?: Array<ResponseInput[number] | ResponsesConfigurationUpdate>;
   previous_response_id?: string;
@@ -466,9 +436,7 @@ export function resolveResponsesContinuationRequest(
     return { request, continuationStatus: "request_changed" };
   }
   const currentInput = prepared.input ?? [];
-  // An ephemeral per-turn context block (never replayed on the next turn) must not make the
-  // cached history look changed; compare against the history without a trailing one.
-  const previousInput = stripTrailingEphemeralContext(continuation.lastRequest.input ?? []);
+  const previousInput = continuation.lastRequest.input ?? [];
   const baselineLength = previousInput.length + continuation.lastResponseItems.length;
   if (currentInput.length < baselineLength) {
     return { request, continuationStatus: "history_shorter" };
