@@ -8,6 +8,7 @@ import {
   buildOpenAICompatibleReplayPolicy,
   buildPassthroughGeminiSanitizingReplayPolicy,
   buildStrictAnthropicReplayPolicy,
+  modelUsesResponsesHttpContinuation,
   resolveTaggedReasoningOutputMode,
   sanitizeGoogleGeminiReplayHistory,
 } from "../plugins/provider-replay-helpers.js";
@@ -363,6 +364,7 @@ export function buildProviderReplayFamilyHooks(
           buildOpenAICompatibleReplayPolicy(ctx.modelApi, {
             ...policyOptions,
             modelId: ctx.modelId,
+            appendOnlyRuntimeContext: modelUsesResponsesHttpContinuation(ctx),
           }),
       };
     }

@@ -84,6 +84,34 @@ describe("provider replay helpers", () => {
     ).not.toHaveProperty("dropReasoningFromHistory");
   });
 
+  it("keeps runtime context append-only for routes that opt into HTTP continuation", () => {
+    // The continuation transport compares the new request against the cached one item by item, so
+    // a dropped per-turn context carrier shifts every later position and the turn falls back to
+    // resending full history.
+    const continuationModel = {
+      id: "local-deepseek-v4.1-flash-q2",
+      name: "Local",
+      api: "openai-responses" as const,
+      compat: { supportsResponsesContinuation: true },
+    };
+    expect(
+      buildHybridAnthropicOrOpenAIReplayPolicy({
+        provider: "local-deepseek",
+        modelApi: "openai-responses",
+        modelId: continuationModel.id,
+        model: continuationModel,
+      })?.appendOnlyRuntimeContext,
+    ).toBe(true);
+    expect(
+      buildHybridAnthropicOrOpenAIReplayPolicy({
+        provider: "local-deepseek",
+        modelApi: "openai-responses",
+        modelId: continuationModel.id,
+        model: { ...continuationModel, compat: {} },
+      })?.appendOnlyRuntimeContext,
+    ).not.toBe(true);
+  });
+
   it("omits tool-call id sanitization when opted out for openai-responses", () => {
     const policy = buildOpenAICompatibleReplayPolicy("openai-responses", {
       sanitizeToolCallIds: false,

@@ -16,6 +16,24 @@ import type {
   ProviderSanitizeReplayHistoryContext,
 } from "./types.js";
 
+/**
+ * True when a route opts into HTTP continuation, which requires an append-only prompt prefix:
+ * the provider is asked to continue from the response it stored, and the transport compares the
+ * new request against the cached one position by position.
+ */
+export function modelUsesResponsesHttpContinuation(ctx: ProviderReplayPolicyContext): boolean {
+  const api = normalizeLowercaseStringOrEmpty(ctx.modelApi).trim();
+  if (!api.endsWith("responses")) {
+    return false;
+  }
+  const compat = (ctx.model as { compat?: unknown } | undefined)?.compat;
+  return (
+    Boolean(compat) &&
+    typeof compat === "object" &&
+    (compat as Record<string, unknown>).supportsResponsesContinuation === true
+  );
+}
+
 /** @deprecated Provider replay helper; prefer provider-local replay hooks. */
 export function buildOpenAICompatibleReplayPolicy(
   modelApi: string | null | undefined,
@@ -24,6 +42,12 @@ export function buildOpenAICompatibleReplayPolicy(
     duplicateToolCallIdStyle?: "openai";
     modelId?: string | null;
     dropReasoningFromHistory?: boolean;
+    /**
+     * Keep every earlier runtime-context carrier in place. HTTP continuation compares the new
+     * request against the cached one position by position, so a dropped carrier makes every
+     * later item shift and the continuation silently falls back to full history.
+     */
+    appendOnlyRuntimeContext?: boolean;
   } = {},
 ): ProviderReplayPolicy | undefined {
   if (
@@ -54,6 +78,7 @@ export function buildOpenAICompatibleReplayPolicy(
       : {}),
     ...(isResponsesFamily ? { allowSyntheticToolResults: true } : {}),
     applyAssistantFirstOrderingFix: modelApi === "openai-completions",
+    ...(options.appendOnlyRuntimeContext ? { appendOnlyRuntimeContext: true } : {}),
     validateGeminiTurns: modelApi === "openai-completions",
     validateAnthropicTurns: modelApi === "openai-completions",
     ...(modelApi === "openai-completions" && dropReasoningFromHistory
@@ -148,7 +173,10 @@ export function buildHybridAnthropicOrOpenAIReplayPolicy(
     });
   }
 
-  return buildOpenAICompatibleReplayPolicy(ctx.modelApi, { modelId: ctx.modelId });
+  return buildOpenAICompatibleReplayPolicy(ctx.modelApi, {
+    modelId: ctx.modelId,
+    appendOnlyRuntimeContext: modelUsesResponsesHttpContinuation(ctx),
+  });
 }
 
 const GOOGLE_TURN_ORDERING_CUSTOM_TYPE = "google-turn-ordering-bootstrap";
