@@ -325,6 +325,38 @@ describe("resolveEmbeddedAgentStream", () => {
     expect(innerStreamFn).toHaveBeenCalledTimes(1);
   });
 
+  it("forwards the run session id to a custom OpenAI Responses transport that opts into HTTP continuation", async () => {
+    // A custom `openai-responses` route only becomes continuation-eligible via
+    // compat.supportsResponsesContinuation. If the run session id never reaches the
+    // transport options, the client silently resends the whole context each turn
+    // because previous_response_id is never sent. Embedded runs always carry a run
+    // signal, which is what routes this custom stream through the wrapper.
+    const currentStreamFn = vi.fn(async (_model, _context, options) => options);
+    const { streamFn } = resolveEmbeddedAgentStream({
+      currentStreamFn: currentStreamFn as never,
+      sessionId: "continuation-session",
+      signal: new AbortController().signal,
+      model: {
+        api: "openai-responses",
+        provider: "local-deepseek",
+        id: "local-deepseek-v4.1-flash-q2",
+        baseUrl: "http://192.168.88.192:8181/v1",
+        compat: { supportsResponsesContinuation: true },
+      } as never,
+    });
+
+    expect(streamFn).not.toBe(currentStreamFn);
+    const options = await expectStreamResultRecord(
+      streamFn(
+        { provider: "local-deepseek", id: "local-deepseek-v4.1-flash-q2" } as never,
+        {} as never,
+        {},
+      ),
+      "custom OpenAI Responses continuation options",
+    );
+    expect(options.sessionId).toBe("continuation-session");
+  });
+
   it("routes Codex responses fallbacks through OpenClaw native transport", async () => {
     // Codex OAuth models use the OpenClaw native transport, with prompt-cache
     // markers stripped before the harness sees system prompt text.

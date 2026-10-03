@@ -137,6 +137,7 @@ export function selectEmbeddedAgentStream(params: EmbeddedAgentStreamParams): {
   const wrapOptions = {
     runSignal: params.signal,
     authProfileId: params.authProfileId,
+    sessionId: params.sessionId,
     promptCacheKey: params.promptCacheKey,
     assertCurrent: params.assertCurrent,
   };
@@ -170,6 +171,7 @@ export function selectEmbeddedAgentStream(params: EmbeddedAgentStreamParams): {
         params.signal || params.assertCurrent
           ? wrapEmbeddedAgentStreamFn(vertexStreamFn, {
               runSignal: params.signal,
+              sessionId: params.sessionId,
               assertCurrent: params.assertCurrent,
             })
           : vertexStreamFn,
@@ -187,7 +189,6 @@ export function selectEmbeddedAgentStream(params: EmbeddedAgentStreamParams): {
     return {
       streamFn: wrapEmbeddedAgentStreamFn(nativeStreamFn, {
         ...wrapOptions,
-        sessionId: params.sessionId,
         transformContext: stripCacheBoundary,
       }),
       strategy: "openclaw-native-codex-responses",
@@ -213,7 +214,6 @@ export function selectEmbeddedAgentStream(params: EmbeddedAgentStreamParams): {
       return {
         streamFn: wrapEmbeddedAgentStreamFn(boundaryAwareStreamFn, {
           ...wrapOptions,
-          sessionId: params.sessionId,
         }),
         strategy: `boundary-aware:${params.model.api}`,
         wrapApiKey: wrapRunApiKey,
@@ -227,9 +227,8 @@ export function selectEmbeddedAgentStream(params: EmbeddedAgentStreamParams): {
       !promptCacheKey && !params.signal && !params.assertCurrent
         ? currentStreamFn
         : wrapEmbeddedAgentStreamFn(currentStreamFn, {
-            runSignal: params.signal,
+            ...wrapOptions,
             promptCacheKey,
-            assertCurrent: params.assertCurrent,
           }),
     strategy: isDefault ? "stream-simple" : "session-custom",
     wrapApiKey: keepStreamAuth,
