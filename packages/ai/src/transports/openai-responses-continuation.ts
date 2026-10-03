@@ -19,6 +19,53 @@ import { sha256Hex } from "./transport-utils.js";
 const HTTP_CONTINUATION_IDLE_TTL_MS = 5 * 60 * 1000;
 const TURN_HEADERS = new Set(["traceparent", "x-openclaw-turn-id", "x-openclaw-turn-attempt"]);
 
+// Transport-written wrappers this runtime decorates the active turn with but does not reproduce
+// identically when the same message is replayed as history: a timestamp envelope and the
+// inter-session provenance header. Both are ours and both are re-derived per turn, so the
+// byte-for-byte prefix check has to ignore them.
+const LEADING_TIMESTAMP_ENVELOPE_RE = /^\[[A-Za-z]{3} \d{4}-\d{2}-\d{2} \d{2}:\d{2}[^\]]*\]\s*/u;
+const INTER_SESSION_HEADER_RE =
+  /^\[Inter-session message\][^\n]*\n(?:This content was routed[^\n]*\n)?/u;
+
+function stripTransportEnvelopes(text: string): string {
+  let out = text;
+  for (;;) {
+    const next = out
+      .replace(LEADING_TIMESTAMP_ENVELOPE_RE, "")
+      .replace(INTER_SESSION_HEADER_RE, "");
+    if (next === out) {
+      return out;
+    }
+    out = next;
+  }
+}
+
+/** Comparison-only view: user text without the per-turn wrappers the runtime re-derives. */
+function normalizeTransportEnvelopesForComparison(input: readonly unknown[]): unknown[] {
+  return input.map((item) => {
+    if (!isRecord(item) || item.type !== "message" || item.role !== "user") {
+      return item;
+    }
+    const content = item.content;
+    if (!Array.isArray(content)) {
+      return item;
+    }
+    let changed = false;
+    const nextContent = content.map((part) => {
+      if (!isRecord(part) || typeof part.text !== "string") {
+        return part;
+      }
+      const stripped = stripTransportEnvelopes(part.text);
+      if (stripped === part.text) {
+        return part;
+      }
+      changed = true;
+      return { ...part, text: stripped };
+    });
+    return changed ? { ...item, content: nextContent } : item;
+  });
+}
+
 export type ResponsesContinuationRequest = Record<string, unknown> & {
   input?: Array<ResponseInput[number] | ResponsesConfigurationUpdate>;
   previous_response_id?: string;
@@ -435,8 +482,15 @@ export function resolveResponsesContinuationRequest(
   ) {
     return { request, continuationStatus: "request_changed" };
   }
-  const currentInput = prepared.input ?? [];
-  const previousInput = continuation.lastRequest.input ?? [];
+  const rawCurrentInput = prepared.input ?? [];
+  // Compare without the per-turn wrappers: the active turn and its later replay carry the
+  // timestamp envelope and the inter-session header in different combinations, which would
+  // otherwise report a history change on every turn. Lengths are preserved, so the delta slice
+  // below stays valid and the wire keeps the unwrapped request.
+  const currentInput = normalizeTransportEnvelopesForComparison(rawCurrentInput);
+  const previousInput = normalizeTransportEnvelopesForComparison(
+    continuation.lastRequest.input ?? [],
+  );
   const baselineLength = previousInput.length + continuation.lastResponseItems.length;
   if (currentInput.length < baselineLength) {
     return { request, continuationStatus: "history_shorter" };
@@ -460,7 +514,7 @@ export function resolveResponsesContinuationRequest(
     return { request, continuationStatus: "history_changed" };
   }
   const restoredInput = restoreRawCallIdsInDelta(
-    currentInput.slice(baselineLength),
+    rawCurrentInput.slice(baselineLength),
     continuation.lastResponseItems,
     replayedToolRoundInput,
     continuation.pendingToolCalls ?? [],

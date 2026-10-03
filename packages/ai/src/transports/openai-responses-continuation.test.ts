@@ -166,6 +166,79 @@ describe("OpenAI Responses continuation", () => {
     });
   });
 
+  it("continues when the active turn and its replay wrap the same text differently", () => {
+    // The runtime decorates the active turn with a timestamp envelope and strips the inter-session
+    // provenance header, then replays the same message with the header and no timestamp. Both
+    // wrappers are re-derived per turn, so the prefix check must ignore them.
+    const state = continuationState();
+    const task = {
+      type: "message" as const,
+      role: "user" as const,
+      content: [{ type: "input_text" as const, text: "[Subagent Context] do the thing" }],
+    };
+    const carrier = (n: number) => ({
+      type: "message" as const,
+      role: "user" as const,
+      content: [
+        {
+          type: "input_text" as const,
+          text: `<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\ndata ${n}\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>`,
+        },
+      ],
+    });
+    const assistant = (text: string) => ({
+      type: "message" as const,
+      role: "assistant" as const,
+      content: [{ type: "output_text" as const, text, annotations: [] }],
+    });
+    state.lastRequest.input = [
+      task,
+      carrier(1),
+      assistant("first"),
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "[Sun 2026-10-04 06:15 GMT+8] 1+2" }],
+      },
+      carrier(2),
+    ] as never;
+    state.lastResponseItems = [assistant("3")] as never;
+    const request: ResponsesContinuationRequest = {
+      ...state.lastRequest,
+      input: [
+        task,
+        carrier(1),
+        assistant("first"),
+        {
+          type: "message",
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text:
+                "[Inter-session message] sourceSession=agent:main:dashboard:x sourceChannel=webchat " +
+                "sourceTool=sessions_send isUser=false\n" +
+                "This content was routed by OpenClaw from another session or internal tool.\n1+2",
+            },
+          ],
+        },
+        carrier(2),
+        assistant("3"),
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "[Sun 2026-10-04 06:20 GMT+8] 1+3" }],
+        },
+        carrier(3),
+      ] as never,
+    };
+
+    expect(resolveResponsesContinuationRequest(state, request)).toMatchObject({
+      continuationStatus: "continued",
+      request: { previous_response_id: "resp_1" },
+    });
+  });
+
   it.each([
     {
       name: "instructions",
