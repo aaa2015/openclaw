@@ -297,6 +297,34 @@ describe("resolveTranscriptPolicy", () => {
     expectStrictOpenAiCompatibleReplayDefaults("custom-openai-proxy");
   });
 
+  it("keeps runtime context append-only for unowned routes that opt into HTTP continuation", () => {
+    // Continuation compares the request against the cached one item by item, so dropping an
+    // earlier context carrier shifts every later position and the continuation falls back to a
+    // full resend.
+    const continuationModel = {
+      id: "local-deepseek-v4.1-flash-q2",
+      name: "Local",
+      api: "openai-responses" as const,
+      compat: { supportsResponsesContinuation: true },
+    };
+    expect(
+      resolveTranscriptPolicy({
+        provider: "local-deepseek",
+        modelId: continuationModel.id,
+        modelApi: "openai-responses",
+        model: continuationModel,
+      }).appendOnlyRuntimeContext,
+    ).toBe(true);
+    expect(
+      resolveTranscriptPolicy({
+        provider: "local-deepseek",
+        modelId: continuationModel.id,
+        modelApi: "openai-responses",
+        model: { ...continuationModel, compat: {} },
+      }).appendOnlyRuntimeContext,
+    ).not.toBe(true);
+  });
+
   it("enables assistant prefill stripping for unowned Claude OpenAI Responses routes (#79688)", () => {
     const claudePolicy = resolveTranscriptPolicy({
       provider: "anthropic-foundry",

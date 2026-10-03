@@ -10,7 +10,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePluginControlPlaneFingerprint } from "../plugins/plugin-control-plane-context.js";
 import type { ProviderRuntimePluginHandle } from "../plugins/provider-hook-runtime.js";
 import { resolveProviderRuntimePlugin } from "../plugins/provider-hook-runtime.js";
-import { shouldDropClaudeThinkingBlocks } from "../plugins/provider-replay-helpers.js";
+import {
+  modelUsesResponsesHttpContinuation,
+  shouldDropClaudeThinkingBlocks,
+} from "../plugins/provider-replay-helpers.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import type { ProviderReplayPolicy } from "../plugins/types.js";
 import { isAnthropicApi } from "./embedded-agent-helpers/anthropic-api.js";
@@ -121,6 +124,7 @@ function buildUnownedProviderTransportReplayFallback(params: {
     : false;
   return {
     ...(isGoogle || isAnthropic ? { sanitizeMode: "full" as const } : {}),
+    ...(modelUsesResponsesHttpContinuation(params) ? { appendOnlyRuntimeContext: true } : {}),
     ...(isGoogle || isAnthropic || requiresOpenAiCompatibleToolIdSanitization
       ? {
           sanitizeToolCallIds: true,

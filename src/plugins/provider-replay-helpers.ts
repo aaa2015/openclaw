@@ -21,12 +21,15 @@ import type {
  * the provider is asked to continue from the response it stored, and the transport compares the
  * new request against the cached one position by position.
  */
-export function modelUsesResponsesHttpContinuation(ctx: ProviderReplayPolicyContext): boolean {
-  const api = normalizeLowercaseStringOrEmpty(ctx.modelApi).trim();
+export function modelUsesResponsesHttpContinuation(params: {
+  modelApi?: string | null;
+  model?: { compat?: unknown } | undefined;
+}): boolean {
+  const api = normalizeLowercaseStringOrEmpty(params.modelApi).trim();
   if (!api.endsWith("responses")) {
     return false;
   }
-  const compat = (ctx.model as { compat?: unknown } | undefined)?.compat;
+  const compat = params.model?.compat;
   return (
     Boolean(compat) &&
     typeof compat === "object" &&
