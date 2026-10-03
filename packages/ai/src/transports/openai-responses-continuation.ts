@@ -525,12 +525,26 @@ export function claimOpenAIResponsesHttpContinuation(
     sessionId: string;
     request: ResponsesContinuationRequest;
     restoreRequest?: () => ResponsesContinuationRequest;
+    /** Transport logger; used to surface continuation-state anomalies at info level. */
+    log?: { info(message: string): void };
   },
 ) {
   const key = `${params.sessionId}\0${connectionIdentity(params)}`;
   const previous = httpContinuationEntries.get(key);
   if (previous?.kind === "claimed") {
+    // A claim that never committed or released silently disables continuation for this
+    // session; surface it instead of returning the same undefined as an ordinary miss.
+    params.log?.info(
+      `[responses] continuation claim skipped: prior claim still pending session=${params.sessionId}`,
+    );
     return undefined;
+  }
+  if (!previous) {
+    params.log?.info(
+      `[responses] continuation cold claim (no warm state) session=${params.sessionId} store=${String(
+        params.request.store,
+      )} prev=${String(params.request.previous_response_id ?? "none")}`,
+    );
   }
   if (previous?.kind === "ready") {
     clearTimeout(previous.idleTimer);
@@ -555,6 +569,9 @@ export function claimOpenAIResponsesHttpContinuation(
         dispatchedPreviousResponseId?: string,
       ) => {
         if (httpContinuationEntries.get(key) !== claimed) {
+          params.log?.info(
+            `[responses] continuation commit dropped: claim no longer owned session=${params.sessionId}`,
+          );
           return;
         }
         const ready = {

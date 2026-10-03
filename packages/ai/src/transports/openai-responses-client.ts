@@ -343,6 +343,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
             baseUrl: model.baseUrl,
             headers: httpHeaders,
             request: params as ResponsesContinuationRequest,
+            log,
             restoreRequest: () =>
               restoreResponsesReasoningState(context, model, responsesOptions, params),
           });
