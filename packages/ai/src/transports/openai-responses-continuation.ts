@@ -560,6 +560,27 @@ export function claimOpenAIResponsesHttpContinuation(
     );
     // Any non-input field that differs from the cached turn, or a history mismatch, makes the
     // resolver fall back to full history. That fallback is silent on the wire, so name it.
+    if (resolved.continuationStatus === "history_changed" && previous?.kind === "ready") {
+      const cachedInput = previous.state.lastRequest.input ?? [];
+      const currentInput = request.input ?? [];
+      const n = Math.min(cachedInput.length, currentInput.length);
+      let firstDiff = -1;
+      for (let i = 0; i < n; i += 1) {
+        if (JSON.stringify(cachedInput[i]) !== JSON.stringify(currentInput[i])) {
+          firstDiff = i;
+          break;
+        }
+      }
+      const idx = firstDiff >= 0 ? firstDiff : 0;
+      params.log?.info(
+        `[responses] continuation mismatch firstDiffIndex=${String(firstDiff)} ` +
+          `cachedLen=${String(cachedInput.length)} currentLen=${String(currentInput.length)} ` +
+          `cachedItem=${JSON.stringify(cachedInput[idx] ?? null).slice(0, 240)} ` +
+          `currentItem=${JSON.stringify(currentInput[idx] ?? null).slice(0, 240)} ` +
+          `cachedResp=${JSON.stringify(previous.state.lastResponseItems).slice(0, 240)} ` +
+          `session=${params.sessionId}`,
+      );
+    }
     params.log?.info(
       `[responses] continuation resolve status=${resolved.continuationStatus} ` +
         `warm=${String(previous?.kind === "ready")} ` +
