@@ -594,7 +594,7 @@ export function claimOpenAIResponsesHttpContinuation(
     return undefined;
   }
   if (!previous) {
-    params.log?.info(
+    params.log?.debug(
       `[responses] continuation cold claim (no warm state) session=${params.sessionId} store=${String(
         params.request.store,
       )} prev=${String(params.request.previous_response_id ?? "none")}`,
@@ -635,7 +635,7 @@ export function claimOpenAIResponsesHttpContinuation(
           `session=${params.sessionId}`,
       );
     }
-    params.log?.info(
+    params.log?.debug(
       `[responses] continuation resolve status=${resolved.continuationStatus} ` +
         `warm=${String(previous?.kind === "ready")} ` +
         `prevId=${String(resolved.request.previous_response_id ?? "none")} ` +
