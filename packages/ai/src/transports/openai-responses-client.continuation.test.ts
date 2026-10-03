@@ -804,18 +804,32 @@ describe("native OpenAI Responses SSE continuation", () => {
     expect(JSON.stringify(sseState.requests[1]?.input)).not.toContain('"compaction"');
   });
 
-  it.each<{ rejection: string; error: { code: string; param?: string; status: number } }>([
+  it.each<{
+    name: string;
+    rejection: string;
+    error: { code?: string; param?: string; status: number };
+  }>([
     {
+      name: "previous_response_not_found",
       rejection: "previous response not found",
       error: { code: "previous_response_not_found", status: 400 },
     },
     {
+      name: "unsupported_parameter",
       rejection:
         "Previous response cannot be used for this organization due to Zero Data Retention.",
       error: { code: "unsupported_parameter", param: "previous_response_id", status: 400 },
     },
+    {
+      // OpenAI-compatible servers may refuse a stale reference without a structured code,
+      // naming the parameter only in the message (a server keeping one live response).
+      name: "stale live response (message only)",
+      rejection:
+        "previous_response_id 'resp_1' is not the most recent response (this server keeps one live state); replay the full input instead",
+      error: { status: 400 },
+    },
   ])(
-    "recovers a continuation rejected with $error.code using full history",
+    "recovers a continuation rejected with $name using full history",
     async ({ rejection, error }) => {
       sseState.outcomes.push(
         sdkCompletion("resp_1", "first answer"),

@@ -94,11 +94,27 @@ function readWebSocketServerError(value: unknown) {
 // existed (`previous_response_not_found`), or the organization cannot reference stored
 // responses at all (Zero Data Retention rejects the `previous_response_id` parameter).
 // Both reject before any output is accepted, so the turn resends full history instead.
-export function isPreviousResponseRejection(error: { code?: unknown; param?: unknown }): boolean {
-  return (
+//
+// OpenAI-compatible servers may refuse a stale reference with a plain 400
+// invalid_request_error instead of a structured code (a server that keeps only one live
+// response, for example). Match that shape by message for the same full-history replay.
+export function isPreviousResponseRejection(error: {
+  code?: unknown;
+  param?: unknown;
+  status?: unknown;
+  message?: unknown;
+}): boolean {
+  if (
     error.code === "previous_response_not_found" ||
     (error.code === "unsupported_parameter" && error.param === "previous_response_id")
-  );
+  ) {
+    return true;
+  }
+  if (error.status !== 400) {
+    return false;
+  }
+  const message = typeof error.message === "string" ? error.message.toLowerCase() : "";
+  return message.includes("previous_response_id");
 }
 
 export function parseOpenAIResponsesWebSocketServerError(cause: unknown) {
