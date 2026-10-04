@@ -493,9 +493,10 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
       };
     }
     // A route that continues the stored conversation pays prefill for whatever this adds. The
-    // sender block is ambient metadata rather than the user's words, so leave it out there; an
-    // explicit contextInjection="always" keeps it.
-    const skipPersistedSenderContext =
+    // sender block and the timestamp envelope are transport wrapping rather than the user's words,
+    // so leave them out there; an explicit contextInjection="always" keeps them. The model can
+    // still read the clock through its session tooling.
+    const leanContinuationIngress =
       input.attempt.config?.agents?.defaults?.contextInjection !== "always" &&
       modelUsesResponsesHttpContinuation({
         modelApi: input.attempt.model?.api,
@@ -505,7 +506,9 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
     return {
       sessionVersion: sessionManager.getHeader()?.version,
       appendOnlyRuntimeContext: input.appendOnlyRuntimeContext,
-      ...(skipPersistedSenderContext ? { projectPersistedSenderContext: false } : {}),
+      ...(leanContinuationIngress
+        ? { projectPersistedSenderContext: false, includeTimestamp: false }
+        : {}),
       ...(boundaryTimezone ? { timezone: boundaryTimezone } : {}),
       ...(userTranscriptContexts?.length ? { userTranscriptContexts } : {}),
       ...(currentUserTimestampOverride ? { currentUserTimestampOverride } : {}),
