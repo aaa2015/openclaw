@@ -14,6 +14,7 @@ import {
 import type { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { buildInterSessionPromptContext } from "../../../sessions/input-provenance.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
+import { hasCompletedBootstrapTurn, resolveContextInjectionMode } from "../../bootstrap-files.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import {
   buildAgentInternalEventContext,
@@ -429,6 +430,16 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
   }
 
   const escapedProjection = !input.isRawModelRun && usesEscapedRuntimeContext(input.sessionVersion);
+  // "continuation-skip" already suppresses rebootstrap of the workspace files on later turns.
+  // Extend the same intent to the per-turn runtime block (inbound info + exec/subagent/media
+  // facts): after one recorded injection the model still sees that block in the replayed
+  // history, so a fresh copy every turn only buys prefill. Internal events stay unconditional —
+  // they are deliveries, not ambient state.
+  const skipAmbientTurnContext =
+    !input.isRawModelRun &&
+    attempt.operation !== "settled-tool-finalization" &&
+    resolveContextInjectionMode(attempt.config, input.sessionAgentId) === "continuation-skip" &&
+    (await hasCompletedBootstrapTurn(attempt.sessionTarget));
   const eventFragments: RuntimeContextFragment[] = [
     ...buildAgentInternalEventContext(attempt.internalEvents, !escapedProjection),
     ...(attempt.runtimeContextFragments ?? []),
@@ -454,10 +465,12 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
     prompt: promptSubmission.modelPrompt ?? promptSubmission.prompt,
   });
   const fragments: RuntimeContextFragment[] = [
-    ...((escapedProjection ? attempt.currentInboundContext?.fragments : undefined) ??
-      (attempt.currentInboundContext?.text
-        ? [{ kind: "conversation-data" as const, text: attempt.currentInboundContext.text }]
-        : [])),
+    ...(skipAmbientTurnContext
+      ? []
+      : ((escapedProjection ? attempt.currentInboundContext?.fragments : undefined) ??
+        (attempt.currentInboundContext?.text
+          ? [{ kind: "conversation-data" as const, text: attempt.currentInboundContext.text }]
+          : []))),
     ...eventFragments,
   ];
   const currentUserTimestampOverride =
@@ -470,7 +483,9 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
       : undefined;
   const systemPromptForHook = input.systemPromptText;
   const runtimeFacts =
-    input.isRawModelRun || attempt.operation === "settled-tool-finalization"
+    input.isRawModelRun ||
+    attempt.operation === "settled-tool-finalization" ||
+    skipAmbientTurnContext
       ? []
       : await buildRuntimeFactsContext({
           capabilityToolNames: input.capabilityToolNames,
