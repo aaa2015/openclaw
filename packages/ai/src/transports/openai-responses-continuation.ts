@@ -579,8 +579,11 @@ export function claimOpenAIResponsesHttpContinuation(
     sessionId: string;
     request: ResponsesContinuationRequest;
     restoreRequest?: () => ResponsesContinuationRequest;
-    /** Transport logger; used to surface continuation-state anomalies at info level. */
-    log?: { info(message: string): void };
+    /** Transport logger; used to surface continuation-state anomalies at info level and diagnostics at debug level. */
+    log?: {
+      info(message: string): void;
+      debug?(message: string): void;
+    };
   },
 ) {
   const key = `${params.sessionId}\0${connectionIdentity(params)}`;
@@ -594,7 +597,7 @@ export function claimOpenAIResponsesHttpContinuation(
     return undefined;
   }
   if (!previous) {
-    params.log?.debug(
+    params.log?.debug?.(
       `[responses] continuation cold claim (no warm state) session=${params.sessionId} store=${String(
         params.request.store,
       )} prev=${String(params.request.previous_response_id ?? "none")}`,
@@ -635,7 +638,7 @@ export function claimOpenAIResponsesHttpContinuation(
           `session=${params.sessionId}`,
       );
     }
-    params.log?.debug(
+    params.log?.debug?.(
       `[responses] continuation resolve status=${resolved.continuationStatus} ` +
         `warm=${String(previous?.kind === "ready")} ` +
         `prevId=${String(resolved.request.previous_response_id ?? "none")} ` +

@@ -341,7 +341,8 @@ type PromptContextAttempt = Pick<
   | "sessionKey"
   | "suppressNextUserMessagePersistence"
   | "operation"
->;
+> &
+  Partial<Pick<EmbeddedRunAttemptParams, "model" | "sessionTarget">>;
 
 type PromptAssemblyContext = {
   effectivePrompt: string;
