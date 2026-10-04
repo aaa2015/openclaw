@@ -436,13 +436,10 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
   // The per-turn runtime block (inbound requester info, exec/subagent/media facts) is rebuilt and
   // resent on every turn. On a route that stores and continues the conversation the earlier copy
   // is already in the replayed history, so a fresh copy only buys prefill: measured ~240 tokens
-  // per turn, which is most of a local model turn's 2s. Skip it from the second turn on; an
-  // explicit contextInjection="always" restores the previous behavior, "continuation-skip"
-  // forces the skip. Internal events stay unconditional — they are deliveries, not ambient state.
-  //
-  // "Not the first turn" is read from the conversation itself: subagent sessions never record a
-  // completed-bootstrap marker, so that signal would never fire for them.
-  const hasPriorAssistantTurn = input.messages.some((message) => message.role === "assistant");
+  // per turn, which is most of a local model turn's 2s. Skip it entirely on those routes so the
+  // prompt carries the user's own words only; an explicit contextInjection="always" restores the
+  // previous behavior and "continuation-skip" forces the skip anywhere. Internal events stay
+  // unconditional — they are deliveries, not ambient state.
   const explicitContextInjection =
     (attempt.config && input.sessionAgentId
       ? resolveAgentConfig(attempt.config, input.sessionAgentId)?.contextInjection
@@ -450,7 +447,6 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
   const skipAmbientTurnContext =
     !input.isRawModelRun &&
     attempt.operation !== "settled-tool-finalization" &&
-    hasPriorAssistantTurn &&
     (resolveContextInjectionMode(attempt.config, input.sessionAgentId) === "continuation-skip" ||
       (explicitContextInjection !== "always" &&
         modelUsesResponsesHttpContinuation({
