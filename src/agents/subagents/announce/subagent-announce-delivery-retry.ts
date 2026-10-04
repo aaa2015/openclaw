@@ -72,11 +72,16 @@ const PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
 ];
 
 function isWriterClaimReboundAnnounceError(error: unknown): boolean {
-  return Boolean(
-    (error &&
-      typeof error === "object" &&
-      (error as { name?: unknown }).name === "SessionTranscriptWriterClaimReboundError") ||
-    WRITER_CLAIM_REBOUND_ANNOUNCE_RE.test(summarizeDeliveryError(error)),
+  if (!error || typeof error !== "object") {
+    return WRITER_CLAIM_REBOUND_ANNOUNCE_RE.test(summarizeDeliveryError(error));
+  }
+  const candidate = error as { name?: unknown; code?: unknown };
+  // The SQLite write guard throws a named error, while the transcript append boundary reports the
+  // same condition as a refusal result. Once wrapped, its code is the only identity left.
+  return (
+    candidate.name === "SessionTranscriptWriterClaimReboundError" ||
+    candidate.code === "session-rebound" ||
+    WRITER_CLAIM_REBOUND_ANNOUNCE_RE.test(summarizeDeliveryError(error))
   );
 }
 

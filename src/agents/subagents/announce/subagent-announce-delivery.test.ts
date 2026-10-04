@@ -5673,5 +5673,23 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
 
     expect(testing.hasAnnounceSendEvidence(err)).toBe(true);
   });
+
+  it("treats a transcript refusal carrying the rebound code as permanent", () => {
+    const err = Object.assign(
+      new Error(
+        "Failed to persist terminal assistant error: session rebound for sessionKey: agent:main:dashboard:abc",
+      ),
+      { code: "session-rebound" },
+    );
+
+    expect(testing.isPermanentAnnounceDeliveryError(err)).toBe(true);
+  });
+
+  it("still treats an unnamed transport error as retryable", () => {
+    expect(testing.isPermanentAnnounceDeliveryError(new Error("connect ECONNRESET"))).toBe(false);
+    expect(testing.isPermanentAnnounceDeliveryError(new Error("gateway not connected"))).toBe(
+      false,
+    );
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

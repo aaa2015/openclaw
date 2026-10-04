@@ -869,6 +869,34 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     expect(completeBatchSpy).toHaveBeenCalledOnce();
   });
 
+  it("records a writer claim rebound as one permanent completion failure", async () => {
+    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([
+      makeSettledChild({ runId: "run-a" }),
+      makeSettledChild({ runId: "run-b" }),
+    ]);
+    // The terminal-error transcript boundary reports a rebound write as a refusal code, and that
+    // code is the only identity left once the reason is wrapped into an error message.
+    const error = Object.assign(
+      new Error(
+        "Failed to persist terminal assistant error: session rebound for sessionKey: agent:main:dashboard:abc",
+      ),
+      { code: "session-rebound" },
+    );
+    deliverSpy.mockRejectedValueOnce(error);
+
+    expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).toBe(false);
+    expect(completeBatchSpy).toHaveBeenCalledExactlyOnceWith(["run-a", "run-b"], undefined, {
+      delivered: false,
+      path: "none",
+      disposition: "permanent_failure",
+      error: error.message,
+    });
+    // A rebound writer claim cannot heal by waiting, so the wake must not spend retry budget.
+    expect(deliverSpy).toHaveBeenCalledOnce();
+    expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).toBe(false);
+    expect(completeBatchSpy).toHaveBeenCalledOnce();
+  });
+
   it("does not retry an ambiguous delivery failure", async () => {
     registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([
       makeSettledChild({ runId: "run-a" }),

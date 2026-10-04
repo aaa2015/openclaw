@@ -148,7 +148,14 @@ export function createAssistantErrorTranscript(params: { runId: string; config?:
             config: params.config,
           });
           if (!result.ok) {
-            throw new Error(`Failed to persist terminal assistant error: ${result.reason}`);
+            // Carry the refusal code: delivery classifiers decide retry versus permanent from the
+            // error, and a bare message erases the identity. A rebound transcript write is
+            // permanent — the session already moved to another writer — so retrying only burns the
+            // backoff budget before the batch is dropped anyway.
+            throw Object.assign(
+              new Error(`Failed to persist terminal assistant error: ${result.reason}`),
+              result.code ? { code: result.code } : {},
+            );
           }
         },
       );
