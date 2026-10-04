@@ -107,6 +107,13 @@ export function parseCacheStableSessionScope(
     const base = parsed ? `agent:${parsed.agentId}:${baseTail}` : baseTail;
     return { baseSessionKey: base, isVolatile: true };
   }
+  // A subagent key carries a fresh UUID per spawn. Rendering it into the system prompt makes
+  // every child's prompt unique, which defeats prompt-prefix reuse for the whole tail (including
+  // the tool definitions that render after the system message). Keep the stable base only.
+  if (lowerRest.startsWith("subagent:")) {
+    const base = parsed ? `agent:${parsed.agentId}:subagent` : "subagent";
+    return { baseSessionKey: base, isVolatile: true };
+  }
   return { baseSessionKey: raw, isVolatile: false };
 }
 

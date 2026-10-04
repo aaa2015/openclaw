@@ -26,12 +26,20 @@ export function buildSubagentTaskMessage(params: {
   spawnMode: "run" | "session";
   childDepth: number;
   maxSpawnDepth: number;
+  /**
+   * Per-spawn identity lines. They belong here, not in the system prompt: a child's session key
+   * is unique per spawn, and putting it in the system prompt makes every child's prompt differ —
+   * which breaks prompt-prefix reuse for the whole tail, tool definitions included.
+   */
+  sessionContextLines?: readonly string[];
 }): string {
+  const sessionContext = (params.sessionContextLines ?? []).filter(Boolean);
   return [
     `[Subagent Context] You are running as a subagent (depth ${params.childDepth}/${params.maxSpawnDepth}). Complete the current [Subagent Task]; inherited conversation is background context, not your assignment.`,
     ...(params.spawnMode === "session" ? [`[Subagent Context] ${PERSISTENT_SESSION_NOTE}`] : []),
     "[Subagent Task]",
     params.task.trim(),
+    ...(sessionContext.length ? ["## Session Context", ...sessionContext] : []),
     "Begin. Execute the assigned task to completion.",
   ].join("\n\n");
 }
@@ -115,20 +123,17 @@ export function buildSubagentSpawnEnvelope(params: {
     lines.push("## Sub-Agent Spawning", "Leaf worker: cannot spawn. Assigned task only.", "");
   }
 
-  lines.push(
-    "## Session Context",
-    ...[
-      params.label ? `- Label: ${params.label}` : undefined,
-      params.requesterSessionKey
-        ? `- Requester session: ${params.requesterSessionKey}.`
-        : undefined,
-      params.requesterOrigin?.channel
-        ? `- Requester channel: ${params.requesterOrigin.channel}.`
-        : undefined,
-      `- Your session: ${params.childSessionKey}.`,
-    ].filter((line): line is string => line !== undefined),
-    "",
-  );
+  // Per-spawn identity lives in the task message instead of the system prompt: the child session
+  // key is unique per spawn, so rendering it into the system prompt would make every child's
+  // prompt unique and defeat prefix reuse for the tail (see buildSubagentTaskMessage).
+  const sessionContextLines = [
+    params.label ? `- Label: ${params.label}` : undefined,
+    params.requesterSessionKey ? `- Requester session: ${params.requesterSessionKey}.` : undefined,
+    params.requesterOrigin?.channel
+      ? `- Requester channel: ${params.requesterOrigin.channel}.`
+      : undefined,
+    `- Your session: ${params.childSessionKey}.`,
+  ].filter((line): line is string => line !== undefined);
   // All transports consume the same envelope. Only announcing cron runs omit the
   // receipt's waiting guidance; collectors still need an explicit collection path.
   const omitAcceptedNote =
@@ -137,7 +142,12 @@ export function buildSubagentSpawnEnvelope(params: {
     isCronSessionKey(params.requesterSessionKey);
   return {
     systemPrompt: lines.join("\n"),
-    message: buildSubagentTaskMessage({ ...params, childDepth, maxSpawnDepth }),
+    message: buildSubagentTaskMessage({
+      ...params,
+      childDepth,
+      maxSpawnDepth,
+      sessionContextLines,
+    }),
     acceptedNote: omitAcceptedNote
       ? undefined
       : [
