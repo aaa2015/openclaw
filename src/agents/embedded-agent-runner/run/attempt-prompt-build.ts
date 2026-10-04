@@ -12,8 +12,10 @@ import {
   type HeartbeatSummary,
 } from "../../../infra/heartbeat-summary.js";
 import type { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
+import { modelUsesResponsesHttpContinuation } from "../../../plugins/provider-replay-helpers.js";
 import { buildInterSessionPromptContext } from "../../../sessions/input-provenance.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
+import { resolveAgentConfig } from "../../agent-scope.js";
 import { hasCompletedBootstrapTurn, resolveContextInjectionMode } from "../../bootstrap-files.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import {
@@ -430,15 +432,25 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
   }
 
   const escapedProjection = !input.isRawModelRun && usesEscapedRuntimeContext(input.sessionVersion);
-  // "continuation-skip" already suppresses rebootstrap of the workspace files on later turns.
-  // Extend the same intent to the per-turn runtime block (inbound info + exec/subagent/media
-  // facts): after one recorded injection the model still sees that block in the replayed
-  // history, so a fresh copy every turn only buys prefill. Internal events stay unconditional —
-  // they are deliveries, not ambient state.
+  // The per-turn runtime block (inbound requester info, exec/subagent/media facts) is rebuilt and
+  // resent on every turn. On a route that stores and continues the conversation the earlier copy
+  // is already in the replayed history, so a fresh copy only buys prefill: measured ~240 tokens
+  // per turn, which is most of a local model turn's 2s. Skip it there by default; an explicit
+  // contextInjection="always" keeps the old behavior and "continuation-skip" forces the skip.
+  // Internal events stay unconditional — they are deliveries, not ambient state.
+  const explicitContextInjection =
+    (attempt.config && input.sessionAgentId
+      ? resolveAgentConfig(attempt.config, input.sessionAgentId)?.contextInjection
+      : undefined) ?? attempt.config?.agents?.defaults?.contextInjection;
   const skipAmbientTurnContext =
     !input.isRawModelRun &&
     attempt.operation !== "settled-tool-finalization" &&
-    resolveContextInjectionMode(attempt.config, input.sessionAgentId) === "continuation-skip" &&
+    (resolveContextInjectionMode(attempt.config, input.sessionAgentId) === "continuation-skip" ||
+      (explicitContextInjection !== "always" &&
+        modelUsesResponsesHttpContinuation({
+          modelApi: attempt.model?.api,
+          model: attempt.model,
+        }))) &&
     (await hasCompletedBootstrapTurn(attempt.sessionTarget));
   const eventFragments: RuntimeContextFragment[] = [
     ...buildAgentInternalEventContext(attempt.internalEvents, !escapedProjection),
