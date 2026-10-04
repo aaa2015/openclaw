@@ -7,6 +7,7 @@ import {
 } from "../../../media/media-facts.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
+import { modelUsesResponsesHttpContinuation } from "../../../plugins/provider-replay-helpers.js";
 import { isMainSessionRestartRecoveryInputProvenance } from "../../../sessions/input-provenance.js";
 import type { PersistedUserTurnMessage } from "../../../sessions/user-turn-transcript.types.js";
 import { createPreparedEmbeddedAgentSettingsManager } from "../../agent-project-settings.js";
@@ -368,6 +369,7 @@ type SessionBoundaryAttempt = Pick<
   EmbeddedRunAttemptParams,
   | "config"
   | "inputProvenance"
+  | "model"
   | "onUserMessagePersistenceInvalidated"
   | "operation"
   | "prompt"
@@ -490,10 +492,20 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
         projectPersistedSenderContext: false,
       };
     }
+    // A route that continues the stored conversation pays prefill for whatever this adds. The
+    // sender block is ambient metadata rather than the user's words, so leave it out there; an
+    // explicit contextInjection="always" keeps it.
+    const skipPersistedSenderContext =
+      input.attempt.config?.agents?.defaults?.contextInjection !== "always" &&
+      modelUsesResponsesHttpContinuation({
+        modelApi: input.attempt.model?.api,
+        model: input.attempt.model,
+      });
     const userTranscriptContexts = input.getUserTranscriptContexts();
     return {
       sessionVersion: sessionManager.getHeader()?.version,
       appendOnlyRuntimeContext: input.appendOnlyRuntimeContext,
+      ...(skipPersistedSenderContext ? { projectPersistedSenderContext: false } : {}),
       ...(boundaryTimezone ? { timezone: boundaryTimezone } : {}),
       ...(userTranscriptContexts?.length ? { userTranscriptContexts } : {}),
       ...(currentUserTimestampOverride ? { currentUserTimestampOverride } : {}),
