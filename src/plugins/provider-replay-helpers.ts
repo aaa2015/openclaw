@@ -17,30 +17,6 @@ import type {
   ProviderSanitizeReplayHistoryContextV2,
 } from "./types.js";
 
-/**
- * True when a route keeps a provider-side copy of the prompt prefix: it either caches prompt
- * prefixes (`supportsPromptCacheKey`) or continues from a stored response
- * (`supportsResponsesContinuation`). Both re-prefill everything from the first changed token, so
- * replaying a message with a dropped runtime-context carrier shifts every later item — tool
- * definitions included — and the whole tail is recomputed on every turn.
- */
-export function requiresStablePromptPrefix(
-  model: Pick<ProviderRuntimeModel, "compat"> | null | undefined,
-): boolean {
-  const compat = model?.compat;
-  if (!compat || typeof compat !== "object") {
-    return false;
-  }
-  // `compat` is already known to be a non-null object (guarded above). This only re-reads two of
-  // its keys as `unknown`, and both are compared with `=== true`, so no unvalidated value escapes.
-  // SAFETY: structural re-read of two optional capability keys; non-boolean values fail closed.
-  const flags = compat as {
-    supportsPromptCacheKey?: unknown;
-    supportsResponsesContinuation?: unknown;
-  };
-  return flags.supportsPromptCacheKey === true || flags.supportsResponsesContinuation === true;
-}
-
 /** @deprecated Provider replay helper; prefer provider-local replay hooks. */
 export function buildOpenAICompatibleReplayPolicy(
   modelApi: string | null | undefined,
@@ -49,8 +25,6 @@ export function buildOpenAICompatibleReplayPolicy(
     duplicateToolCallIdStyle?: "openai";
     modelId?: string | null;
     dropReasoningFromHistory?: boolean;
-    /** Route facts; a route that caches its prefix keeps the runtime context append-only. */
-    model?: Pick<ProviderRuntimeModel, "compat"> | null;
   } = {},
 ): ProviderReplayPolicy | undefined {
   if (
@@ -80,9 +54,6 @@ export function buildOpenAICompatibleReplayPolicy(
         }
       : {}),
     ...(isResponsesFamily ? { allowSyntheticToolResults: true } : {}),
-    ...(isResponsesFamily && requiresStablePromptPrefix(options.model)
-      ? { appendOnlyRuntimeContext: true }
-      : {}),
     applyAssistantFirstOrderingFix: modelApi === "openai-completions",
     validateGeminiTurns: modelApi === "openai-completions",
     validateAnthropicTurns: modelApi === "openai-completions",
@@ -185,10 +156,7 @@ export function buildHybridAnthropicOrOpenAIReplayPolicy(
     });
   }
 
-  return buildOpenAICompatibleReplayPolicy(ctx.modelApi, {
-    modelId: ctx.modelId,
-    model: ctx.model,
-  });
+  return buildOpenAICompatibleReplayPolicy(ctx.modelApi, { modelId: ctx.modelId });
 }
 
 const GOOGLE_TURN_ORDERING_CUSTOM_TYPE = "google-turn-ordering-bootstrap";

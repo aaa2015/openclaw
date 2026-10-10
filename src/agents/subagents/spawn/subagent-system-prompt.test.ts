@@ -130,18 +130,27 @@ describe("subagent spawn envelope", () => {
   });
 
   it("keeps per-spawn identity out of the system prompt so prompts stay cacheable", () => {
-    // The child session key is unique per spawn and the label is per task. Rendering either into
-    // the system prompt makes every child's prompt unique, which costs a full re-prefill of the
-    // tail (tool definitions included) on every spawn.
-    const { systemPrompt, message } = buildEnvelope({
-      childSessionKey: "agent:main:subagent:e17aa2a0",
-      label: "spawn-42",
-    });
-    expect(systemPrompt).not.toContain("agent:main:subagent:e17aa2a0");
-    expect(systemPrompt).not.toContain("spawn-42");
-    // The child still receives both, in the task message instead.
-    expect(message).toContain("## Session Context");
-    expect(message).toContain("- Your session: agent:main:subagent:e17aa2a0.");
-    expect(message).toContain("- Label: spawn-42");
+    const stablePrompt = buildEnvelope().systemPrompt;
+    for (const id of ["first", "second"]) {
+      const envelope = buildEnvelope({
+        childSessionKey: `agent:main:subagent:${id}`,
+        requesterSessionKey: `agent:main:dashboard:${id}`,
+        requesterOrigin: { channel: "webchat" },
+        label: `worker-${id}`,
+      });
+      for (const fact of [
+        `- Your session: agent:main:subagent:${id}.`,
+        `- Requester session: agent:main:dashboard:${id}.`,
+        "- Requester channel: webchat.",
+        `- Label: worker-${id}`,
+      ]) {
+        expect(envelope.systemPrompt).not.toContain(fact);
+        expect(envelope.message).toContain(fact);
+      }
+      expect(stripInternalRuntimeContext(envelope.message)).toBe(
+        "UNIQUE_SUBAGENT_TASK\n  preserve indentation",
+      );
+      expect(envelope.systemPrompt).toBe(stablePrompt);
+    }
   });
 });
