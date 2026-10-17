@@ -13,7 +13,6 @@ import {
   type HelloOk,
   selectGatewayConnectAuth,
   shouldRetryGatewayWithDeviceToken,
-  isRetryableGatewayStartupUnavailableError,
   resolveGatewayStartupRetryAfterMs,
   resolveSafeTimeoutDelayMs,
   shouldPauseGatewayReconnect,
@@ -94,6 +93,8 @@ export type GatewayHelloOk = Omit<HelloOk, "server" | "features" | "snapshot" | 
 };
 
 export type GatewayBrowserClientOptions = GatewayBrowserConnectOptions & {
+  /** Local identity admitted by boot-record; never sent to the server. */
+  offlineRecoveryScope?: string;
   onHello?: (hello: GatewayHelloOk) => void;
   onEvent?: (evt: EventFrame) => void;
   onClose?: (info: {
@@ -156,7 +157,6 @@ export class GatewayBrowserClient {
   inboundActivitySeq = 0;
   private lastInboundActivityAtMs: number | null = null;
   private maxInboundSilenceMs: number | null = null;
-  private tickWatchTimer: ReturnType<typeof setInterval> | null = null;
   private pendingDeviceTokenRetry = false;
   private deviceTokenRetryBudgetUsed = false;
   private nativeAuthAbort: AbortController | null = null;
@@ -218,7 +218,7 @@ export class GatewayBrowserClient {
         this.nativeAuthAbort?.abort();
         this.chatEvents.clear();
         this.recovery = { ...this.recovery, generation: context.generation + 1, resolved: false };
-        this.stopTickWatch();
+        this.clearInboundActivity();
         this.scopeUpgradeBinding = null;
         const error = context.connectFailure?.error ?? this.nativeAuthError;
         this.client.recordTiming("failed", context.generation, undefined, {
@@ -303,7 +303,7 @@ export class GatewayBrowserClient {
     this.reachabilityProbe?.abort();
     this.reachabilityProbe = null;
     this.chatEvents.clear();
-    this.stopTickWatch();
+    this.clearInboundActivity();
     this.recovery = { ...this.recovery, generation: this.recovery.generation + 1, resolved: false };
     this.client.stop();
     this.cancelScopeUpgrade();
@@ -321,7 +321,7 @@ export class GatewayBrowserClient {
       !this.client.connected ||
       (this.lastInboundActivityAtMs !== null &&
         this.maxInboundSilenceMs !== null &&
-        Date.now() - this.lastInboundActivityAtMs > this.maxInboundSilenceMs)
+        Date.now() - this.lastInboundActivityAtMs >= this.maxInboundSilenceMs)
     );
   }
 
@@ -332,6 +332,21 @@ export class GatewayBrowserClient {
 
   get recoveryScope() {
     return this.recovery.value;
+  }
+
+  private offlineStorageRetired = false;
+
+  get offlineRecoveryRetired(): boolean {
+    return this.offlineStorageRetired;
+  }
+
+  get offlineRecoveryScope(): string | undefined {
+    return this.opts.offlineRecoveryScope;
+  }
+
+  retireOfflineRecoveryScope(): void {
+    this.opts.offlineRecoveryScope = undefined;
+    this.offlineStorageRetired = true;
   }
 
   get recoveryScopeReady() {
@@ -391,8 +406,11 @@ export class GatewayBrowserClient {
     // Publish this connection's identity before listeners can capture recovery intent.
     // A legacy hello must not retain its predecessor while its digest is pending.
     this.recovery.value = hello.auth?.recoveryScope ?? "";
+    // Replace retained identity before consumers can act on a different account.
+    this.opts.offlineRecoveryScope = hello.auth?.recoveryScope;
+    this.offlineStorageRetired = false;
     this.maxPayloadBytes = hello.policy?.maxPayload;
-    this.startTickWatch(hello);
+    this.initializeInboundActivity(hello);
     this.pendingDeviceTokenRetry = false;
     this.deviceTokenRetryBudgetUsed = false;
     this.opts.bootstrapToken = undefined;
@@ -437,14 +455,13 @@ export class GatewayBrowserClient {
     migrateRecoveryScope?.(this.opts.url, legacyScope, serverScope!);
     this.recovery.value = serverScope ?? legacyScope;
     this.recovery.resolved = true;
+    this.opts.offlineRecoveryScope = this.recovery.value || undefined;
     this.opts.onRecoveryScopeChange?.();
   }
 
-  private startTickWatch(hello: GatewayHelloOk): void {
-    this.stopTickWatch();
+  private initializeInboundActivity(hello: GatewayHelloOk): void {
     const advertisedTickIntervalMs = hello.policy?.tickIntervalMs;
-    // Gateway policy is remote input; use the shared timer clamp so an
-    // oversized interval cannot wrap into a resource-exhausting hot loop.
+    // Retain the bounded stale-tab window advertised by the Gateway.
     const tickIntervalMs = resolveSafeTimeoutDelayMs(
       typeof advertisedTickIntervalMs === "number" &&
         Number.isFinite(advertisedTickIntervalMs) &&
@@ -455,20 +472,11 @@ export class GatewayBrowserClient {
     );
     this.maxInboundSilenceMs = tickIntervalMs * 2;
     this.lastInboundActivityAtMs = Date.now();
-    this.tickWatchTimer = setInterval(() => {
-      // Preserve long-running requests while real Gateway heartbeats arrive;
-      // only a silent socket should enter the shared reconnect lifecycle.
-      if (this.needsWakeReconnect) {
-        this.forceReconnect("tick timeout");
-      }
-    }, tickIntervalMs);
+    // Transport ping/pong owns dead-peer detection. Delayed application ticks
+    // must not reconnect a busy Gateway; silence only informs tab-wake recovery.
   }
 
-  private stopTickWatch(): void {
-    if (this.tickWatchTimer !== null) {
-      clearInterval(this.tickWatchTimer);
-      this.tickWatchTimer = null;
-    }
+  private clearInboundActivity(): void {
     this.lastInboundActivityAtMs = null;
     this.maxInboundSilenceMs = null;
   }
@@ -505,11 +513,12 @@ export class GatewayBrowserClient {
       });
     }
     const startupRetryAfterMs = resolveGatewayStartupRetryAfterMs(err);
-    if (isRetryableGatewayStartupUnavailableError(err)) {
+    if (startupRetryAfterMs !== null) {
       return {
         closeCode: STARTUP_RETRY_CLOSE_CODE,
         closeReason: "gateway starting",
-        reconnectDelayMs: startupRetryAfterMs ?? undefined,
+        // Startup overrides bypass transport backoff; spread tabs without retrying before the hint.
+        reconnectDelayMs: Math.ceil(startupRetryAfterMs * (1 + Math.random() * 0.2)),
       };
     }
     return { closeCode: CONNECT_FAILED_CLOSE_CODE, closeReason: "connect failed" };

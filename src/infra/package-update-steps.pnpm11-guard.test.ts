@@ -1,28 +1,19 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.ts";
 import { PACKAGE_LIFECYCLE_MARKER_CONTRACT_RELATIVE_PATH } from "../../scripts/lib/package-lifecycle-marker.mjs";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { runGlobalPackageUpdateSteps } from "./package-update-steps.js";
+import {
+  createPnpmTarget,
+  packageUpdateStepResult,
+  writePackageRoot,
+} from "./package-update-steps.test-support.js";
 import type { CommandRunner } from "./update-global-command-runner.js";
 
 type PackageUpdateStepResult = Awaited<
   ReturnType<typeof runGlobalPackageUpdateSteps>
 >["steps"][number];
-
-async function writePackageRoot(packageRoot: string, version: string): Promise<void> {
-  await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });
-  await Promise.all([
-    fs.writeFile(
-      path.join(packageRoot, "package.json"),
-      JSON.stringify({ name: "openclaw", version }),
-      "utf8",
-    ),
-    fs.writeFile(path.join(packageRoot, "dist", "index.js"), "export {};\n", "utf8"),
-  ]);
-  await writePackageDistInventory(packageRoot);
-}
 
 async function writePnpmIsolatedPackage(params: {
   globalRoot: string;
@@ -103,13 +94,7 @@ describe("pnpm isolated install preflight (v11 layout)", () => {
       const runStep = vi.fn();
 
       const result = await runGlobalPackageUpdateSteps({
-        installTarget: {
-          manager: "pnpm",
-          command: "pnpm",
-          pnpmIsolated: { layoutVersion: 11 },
-          globalRoot,
-          packageRoot,
-        },
+        installTarget: createPnpmTarget(globalRoot, packageRoot),
         installSpec: "openclaw@2.0.0",
         packageName: "openclaw",
         packageRoot,
@@ -143,13 +128,7 @@ describe("pnpm isolated install preflight (v11 layout)", () => {
       const runStep = vi.fn();
 
       const result = await runGlobalPackageUpdateSteps({
-        installTarget: {
-          manager: "pnpm",
-          command: "pnpm",
-          pnpmIsolated: { layoutVersion: 11 },
-          globalRoot,
-          packageRoot,
-        },
+        installTarget: createPnpmTarget(globalRoot, packageRoot),
         installSpec: "openclaw@2.0.0",
         packageName: "openclaw",
         packageRoot,
@@ -175,13 +154,7 @@ describe("pnpm isolated install preflight (v11 layout)", () => {
       const runStep = vi.fn();
 
       const result = await runGlobalPackageUpdateSteps({
-        installTarget: {
-          manager: "pnpm",
-          command: "pnpm",
-          pnpmIsolated: { layoutVersion: 11 },
-          globalRoot,
-          packageRoot,
-        },
+        installTarget: createPnpmTarget(globalRoot, packageRoot),
         installSpec: "openclaw@2.0.0",
         packageName: "openclaw",
         packageRoot,
@@ -229,13 +202,7 @@ describe("pnpm isolated install preflight (v11 layout)", () => {
       const runStep = vi.fn();
 
       const result = await runGlobalPackageUpdateSteps({
-        installTarget: {
-          manager: "pnpm",
-          command: "pnpm",
-          pnpmIsolated: { layoutVersion: 11 },
-          globalRoot,
-          packageRoot: orphanPackageRoot,
-        },
+        installTarget: createPnpmTarget(globalRoot, orphanPackageRoot),
         installSpec: "openclaw@2.0.0",
         packageName: "openclaw",
         packageRoot: orphanPackageRoot,
@@ -263,7 +230,7 @@ describe("pnpm isolated install preflight (v11 layout)", () => {
         const pathBinDir = path.join(base, "path-pnpm-home", "bin");
         const callerProjectDir = path.join(base, "caller-project");
         const oldPackageRoot = path.join(globalRoot, "old", "node_modules", "openclaw");
-        const newPackageRoot = path.join(globalRoot, "new", "node_modules", "openclaw");
+        const newPackageRoot = path.join(globalRoot, "hash-openclaw", "node_modules", "openclaw");
         await fs.mkdir(ownerBinDir, { recursive: true });
         await writePackageRoot(oldPackageRoot, "1.0.0");
         await fs.writeFile(
@@ -325,8 +292,9 @@ describe("pnpm isolated install preflight (v11 layout)", () => {
           throw new Error(`unexpected command: ${command}`);
         };
         const runStep = vi.fn(
-          async ({ name, argv, cwd, env }): Promise<PackageUpdateStepResult> => {
+          async ({ name, argv, cwd, env, input }): Promise<PackageUpdateStepResult> => {
             if (name === "package-install") {
+              expect(input).toBe("");
               const stage = stagedPnpmPaths(argv, globalRoot);
               if (!stage.projectRoot || !stage.binDir) {
                 throw new Error("missing private pnpm stage");
@@ -393,7 +361,14 @@ describe("pnpm isolated install preflight (v11 layout)", () => {
                 path.join(stageGlobalRoot, "hash-openclaw"),
                 "dir",
               );
+              stagedPackageRoot = path.join(
+                stageGlobalRoot,
+                "hash-openclaw",
+                "node_modules",
+                "openclaw",
+              );
             } else if (name === "pnpm-package-preinstall") {
+              expect(input).toBeUndefined();
               expect(argv).toEqual([
                 process.execPath,
                 path.join(stagedPackageRoot, "scripts", "preinstall-package-manager-warning.mjs"),
@@ -402,6 +377,7 @@ describe("pnpm isolated install preflight (v11 layout)", () => {
                 fs.readFile(path.join(stagedPackageRoot, ".openclaw-lifecycle-pending"), "utf8"),
               ).resolves.toBe("pending\n");
             } else if (name === "pnpm-package-postinstall") {
+              expect(input).toBeUndefined();
               expect(argv).toEqual([
                 process.execPath,
                 path.join(stagedPackageRoot, "scripts", "postinstall-bundled-plugins.mjs"),
@@ -413,13 +389,7 @@ describe("pnpm isolated install preflight (v11 layout)", () => {
             } else {
               throw new Error(`unexpected step: ${name}`);
             }
-            return {
-              name,
-              command: argv.join(" "),
-              cwd: cwd ?? process.cwd(),
-              durationMs: 1,
-              exitCode: 0,
-            };
+            return packageUpdateStepResult({ name, argv, cwd });
           },
         );
         const postVerifyStep = vi.fn(async (packageRoot: string) => {
@@ -434,15 +404,7 @@ describe("pnpm isolated install preflight (v11 layout)", () => {
         });
 
         const result = await runGlobalPackageUpdateSteps({
-          installTarget: {
-            manager: "pnpm",
-            command: "pnpm",
-            pnpmIsolated: {
-              layoutVersion: 11,
-            },
-            globalRoot,
-            packageRoot: oldPackageRoot,
-          },
+          installTarget: createPnpmTarget(globalRoot, oldPackageRoot),
           installSpec: "openclaw@2.0.0",
           packageName: "openclaw",
           packageRoot: oldPackageRoot,
@@ -483,11 +445,11 @@ describe("pnpm isolated install preflight (v11 layout)", () => {
         const globalRoot = path.join(globalDir, "v11");
         const globalBinDir = path.join(base, "pnpm-home", "bin");
         const oldInstallRoot = path.join(globalRoot, "old");
-        const newInstallRoot = path.join(globalRoot, "new");
         const oldPackageRoot = path.join(oldInstallRoot, "node_modules", "openclaw");
-        const newPackageRoot = path.join(newInstallRoot, "node_modules", "openclaw");
         const sharedPackageRoot = path.join(base, "store", "openclaw");
         const activeLink = path.join(globalRoot, "hash-openclaw");
+        // The active package is reported beneath the durable project hash link.
+        const newPackageRoot = path.join(activeLink, "node_modules", "openclaw");
         await Promise.all([
           fs.mkdir(path.dirname(oldPackageRoot), { recursive: true }),
           writePackageRoot(sharedPackageRoot, "1.0.0"),
@@ -520,23 +482,11 @@ describe("pnpm isolated install preflight (v11 layout)", () => {
             fs.symlink(sharedPackageRoot, stagedPackage, "dir"),
             fs.symlink(stagedOwner, stagedLink, "dir"),
           ]);
-          return {
-            name,
-            command: argv.join(" "),
-            cwd: cwd ?? process.cwd(),
-            durationMs: 1,
-            exitCode: 0,
-          };
+          return packageUpdateStepResult({ name, argv, cwd });
         });
 
         const result = await runGlobalPackageUpdateSteps({
-          installTarget: {
-            manager: "pnpm",
-            command: "pnpm",
-            pnpmIsolated: { layoutVersion: 11 },
-            globalRoot,
-            packageRoot: oldPackageRoot,
-          },
+          installTarget: createPnpmTarget(globalRoot, oldPackageRoot),
           installSpec: "openclaw@1.0.0",
           requirePackageReplacement: true,
           packageName: "openclaw",
@@ -670,26 +620,19 @@ describe("pnpm isolated install preflight (v11 layout)", () => {
           `--config.global-dir=${stage.projectRoot}`,
           `--config.global-bin-dir=${stage.binDir}`,
         ]);
-        return {
-          name,
-          command: argv.join(" "),
-          cwd: cwd ?? process.cwd(),
-          durationMs: 1,
-          exitCode: 1,
-          stderrTail: "fixture stop",
-        };
+        return packageUpdateStepResult(
+          { name, argv, cwd },
+          {
+            exitCode: 1,
+            stderrTail: "fixture stop",
+          },
+        );
       });
 
       for (const testCase of cases) {
         expectedInstallSpec = testCase.expectedInstallSpec;
         const result = await runGlobalPackageUpdateSteps({
-          installTarget: {
-            manager: "pnpm",
-            command: "pnpm",
-            pnpmIsolated: { layoutVersion: 11 },
-            globalRoot,
-            packageRoot,
-          },
+          installTarget: createPnpmTarget(globalRoot, packageRoot),
           installSpec: testCase.installSpec,
           packageName: "openclaw",
           packageRoot,
@@ -731,13 +674,7 @@ describe("pnpm isolated install preflight (v11 layout)", () => {
       const runStep = vi.fn();
 
       const result = await runGlobalPackageUpdateSteps({
-        installTarget: {
-          manager: "pnpm",
-          command: "pnpm",
-          pnpmIsolated: { layoutVersion: 11 },
-          globalRoot,
-          packageRoot,
-        },
+        installTarget: createPnpmTarget(globalRoot, packageRoot),
         installSpec: "openclaw@2.0.0",
         packageName: "openclaw",
         packageRoot,
@@ -769,25 +706,11 @@ describe("pnpm isolated install preflight (v11 layout)", () => {
         expect(name).toBe("package-install");
         const stage = stagedPnpmPaths(argv, globalRoot);
         await fs.rm(path.join(stage.globalRoot, path.basename(activeLink)));
-        return {
-          name,
-          command: argv.join(" "),
-          cwd: cwd ?? process.cwd(),
-          durationMs: 1,
-          exitCode: 0,
-        };
+        return packageUpdateStepResult({ name, argv, cwd });
       });
 
       const result = await runGlobalPackageUpdateSteps({
-        installTarget: {
-          manager: "pnpm",
-          command: "pnpm",
-          pnpmIsolated: {
-            layoutVersion: 11,
-          },
-          globalRoot,
-          packageRoot,
-        },
+        installTarget: createPnpmTarget(globalRoot, packageRoot),
         installSpec: "openclaw@2.0.0",
         packageName: "openclaw",
         packageRoot,

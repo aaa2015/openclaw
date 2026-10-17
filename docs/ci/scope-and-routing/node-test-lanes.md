@@ -16,6 +16,7 @@ The slowest Node test families are split or balanced so each job stays small wit
 - Core unit fast/support lanes run separately; unit-src, Control UI, and gateway-core each use three deterministic file-weighted stripes, while the security and media/UI companion configs retain their scoped whole-config support groups; core runtime infra splits into process, shared, hooks, secrets, and three cron domain shards.
 - Auto-reply runs as balanced workers, with the reply subtree split into agent-runner, commands, dispatch, session, and state-routing shards; dispatch further isolates core, delivery, and lifecycle entrypoints.
 - Agentic gateway/server (control-plane) configs split across chat, auth, model, HTTP/plugin, runtime, and startup lanes instead of waiting on built artifacts.
+- Hosted full-release plans retain complete measured generations for CLI process, agent/chat, Gateway methods, and runtime-config owners across inventory changes until the current selection is measured. Matching singleton measurements keep known files from being repriced by a coarse weight. The planner splits these owners into groups of at most 64 files, then packs only measured groups with matching runner, build, and environment requirements into serial jobs with at most 720 seconds of measured or projected work. Each group keeps its own process, timing identity, and two-worker ceiling; a failure still fails the job while remaining groups run. PR, hourly main, and Blacksmith planning keep their existing policies. The whole-job timing importer skips packed jobs. `scripts/ci-refit-test-timings.mts` samples their successful jobs from CI dispatches, including failed workflows, and requires a completion receipt covering every Node and Bun invocation before recording each complete group wall. Two independent runs are required, and these partial inventories cannot prune other measurements. The full-release matrix omits redundant names and default fields to stay within the existing output budget.
 - Normal CI packs only isolated infra include-pattern shards into deterministic bundles of at most 64 test files, reducing the Node matrix without merging non-isolated command/cron, stateful agents-core, or gateway/server suites. Heavy fixed suites stay on 8 vCPU while most bundled and lower-weight lanes use 4 vCPU. Previously promoted compact workloads retain 8-vCPU capacity through their semantic owners and selected files before packing. Timing or build-ownership changes cannot transfer that capacity to an unrelated row. Hosted stripes inherit their parent owner's capacity; whole named manual and release plans retain their existing routing. Full named bundles include their runtime-build mode when present, so `checks-node-bundle-infra-small-runtime-1` and `checks-node-bundle-infra-small-1` identify different prerequisite groups. Their test inventories and runner limits are unchanged; unique names let release collectors retain both jobs without ambiguous attempt evidence.
 - Hourly main on GitHub-hosted runners bounds agent-chat groups to 30 files and Gateway-methods groups to 96. Chat groups and Gateway-methods groups above 32 files run in separate rows; small Gateway tails keep ordinary packing. The measured updater test runs alone instead of extending a storage row. Storage retains its 64-file bound. These main-only splits retain every selected test, config, worker limit, build prerequisite, and timing generation; PR, full-release, and paid-runner plans keep their existing packing. The complete hourly main matrix remains within its 77-row budget.
 - Canonical pull requests resolve their runtime tests from bounded changed owners, transitive import consumers, workspace/public SDK aliases, protected regressions, and explicit policy watches. The Node constructor consumes that selected set. Windows and UI jobs retain complete ordinary inventories when their platform/area owners change; unrelated UI families can still admit precise protected or affected files. Global inputs never request the full compact runtime repository. Missing selector capability fails preflight. Main retains its complete automatic tier, and ordinary manual/release validation adds the existing release-only inventories.
@@ -81,22 +82,13 @@ isolation, worker policy, and group timing. The release-only switch controls the
 full plugin sweep, not the availability of its owner metadata; unrelated PRs
 still do not acquire that sweep.
 
-The fixed PR smoke inventory lives in `PR_SMOKE_TEST_FILES` in
-`scripts/lib/ci-changed-node-test-plan.mts`. It selects six complete existing files:
-
-- `test/gateway-rpc-exporters.test.ts`: Gateway boot, readiness, and authenticated WebSocket/RPC/HTTP serving.
-- `src/config/io.load-async.test.ts`: cold configuration loading and metadata admission.
-- `src/config/io.compat.test.ts`: compatible configuration reads and migration guidance.
-- `src/config/utility-model-separation-migration.io.test.ts`: configuration migration through I/O.
-- `src/plugins/loader.runtime-registry.test.ts`: plugin loading and registry lifecycle.
-- `test/qa-channel-message-tool-delivery.test.ts`: message-tool delivery to a channel conversation.
-
-The smoke files keep their canonical configs and assertions. They supplement
-changed-owner tests and do not opt unrelated Windows or browser jobs into a PR.
-Linux Testbox checks passed all 92 cases in these six files with 161.01 seconds
-of summed wrapper time. That is focused smoke evidence against the three-minute
-budget, not a measured GitHub job wall; CI setup, queueing, and runner contention
-remain separate costs.
+The aggressive PR smoke selects two complete existing files:
+`src/config/io.load-async.test.ts` for cold configuration loading and metadata
+admission, and `src/plugins/loader.runtime-registry.test.ts` for plugin loading
+and registry lifecycle. They retain their canonical configs and assertions and
+occupy at most two Node rows. The full-selection kill switch retains the previous
+six-file smoke inventory, including Gateway serving, config compatibility and
+migration, and message-tool delivery. All six still run on hourly main.
 
 The `PR_EXEMPT_RUNTIME_TEST_FILES` inventory in
 `scripts/lib/ci-proof-test-inventory.mts` keeps measured slow integration tests
@@ -134,4 +126,35 @@ and scripts that the import graph cannot discover.
 Explicit policy watches retain their matching tests in PR CI even when the broader
 tooling or runtime suite is deferred. This includes wrapper dependency checks,
 Gateway client callsite scans, and upgrade-survivor package checks. Unrelated
-deferred tests stay excluded.
+deferred tests stay excluded. Changed test files that no Vitest config routes,
+such as skill `node:test` and Python suites, are never direct targets; the watch
+for their Vitest wrapper must cover those test files too, or test-only edits run
+in no PR job.
+
+Aggressive PR selection keeps changed tests and direct runtime import consumers,
+including package and SDK aliases. A changed module with fewer than 20 direct
+importers also selects tests at depth two; hubs stop at direct consumers. Changed
+packages also select direct package-specifier test consumers; that pass does not
+restart traversal through package readers and bypass the module hub cutoff. Erased type
+imports remain owned by typechecking.
+
+Same-directory tests are selected only when the directory contains at most 30
+test files. Larger flat directories use existing explicit owner mappings and
+name-prefix siblings (`foo.ts` selects `foo*.test.ts`), without recursively
+selecting child directories. Existing fixture, generated-input, and non-import
+policy owners remain explicit. Config changes keep their planner/guard owners
+instead of selecting the entire config inventory. Protected/deferred tests follow
+these same rules, rather than opting in entire owner areas.
+
+The preflight job summary lists every selected file and its selection rules.
+Set repository variable `OPENCLAW_CI_NODE_SELECTION=full` to restore the previous
+PR selection immediately. Hourly main and ordinary manual/release plans keep
+their complete inventories regardless of this variable.
+
+Source-module edits also select six explicit non-import guards: PR wrapper source
+closure, wrapper provisioning, eager import closure, updater swap-fixture
+dependencies, type-suppression inventory, and plugin SDK surface reporting. This
+conservative watch covers new, renamed, and deleted modules and new import edges,
+including dependencies missing from the inventory that should have named them.
+The existing required architecture group still checks source diffs for import
+cycles and topology changes.

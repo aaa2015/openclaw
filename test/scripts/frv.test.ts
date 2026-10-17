@@ -8,7 +8,6 @@ import {
   preflightContinuation,
   watchRelease,
 } from "../../scripts/frv.mjs";
-import type { FlakeClassification } from "../../scripts/full-release-flake-classification.mjs";
 import {
   releaseChildSpec,
   releaseCompositeJobsSha256,
@@ -57,7 +56,6 @@ function preflightMethods(
     })),
   ];
   return {
-    loadFlakeClassifications: async () => ({}),
     getReleaseEvidenceClient: () => ({
       ...createReleaseEvidenceClient(REPOSITORY),
       getWorkflowSource: () => "name: Full Release Validation\n",
@@ -605,7 +603,6 @@ describe("FRV continuation preflight", () => {
 
     await expect(
       continueFailed(parentOwnedPlan, "77", {
-        loadFlakeClassifications: read,
         getReleaseEvidenceClient: () => {
           reads += 1;
           throw new Error("unexpected evidence client");
@@ -688,7 +685,6 @@ describe("FRV continuation preflight", () => {
 
     await expect(
       continueFailed(plan([first, second]), "77", {
-        loadFlakeClassifications: downstreamRead,
         getReleaseEvidenceClient: () => {
           downstreamReads += 1;
           throw new Error("unexpected evidence client");
@@ -752,7 +748,6 @@ describe("FRV same-parent recovery", () => {
     const runReads: string[] = [];
     const attemptReads: Array<[string, number]> = [];
     const result = await inspectContinuation(plan([selected, missing]), {
-      loadFlakeClassifications: async () => ({}),
       getAttemptJobs: async (runId: string, attempt: number) => {
         attemptReads.push([runId, attempt]);
         return [job("test")];
@@ -789,7 +784,6 @@ describe("FRV same-parent recovery", () => {
   it("reports the effective attempt and composite job evidence", async () => {
     const selected = child("normalCi", "101");
     const result = await inspectContinuation(plan([selected]), {
-      loadFlakeClassifications: async () => ({}),
       getAttemptJobs: async (_runId: string, attempt: number) => [
         job("test", attempt === 1 ? "failure" : "success"),
       ],
@@ -1035,63 +1029,6 @@ describe("FRV same-parent recovery", () => {
     expect(client.verify).toHaveBeenCalledOnce();
   });
 
-  it("reseals the failed parent without rerunning a classified child or its failed gate", async () => {
-    const scenario = rerunScenario({ parentSource: [1, "failure"] });
-    const receipt: FlakeClassification = {
-      schema: "openclaw.frv-flake-classification.v1",
-      parentRunId: "77",
-      parentRunAttempt: 1,
-      child: "normalCi",
-      childRunId: "101",
-      childRunAttempt: 1,
-      targetSha: TARGET_SHA,
-      jobId: "501",
-      jobName: "checks-node-test-2",
-      jobUrl: `https://github.com/${REPOSITORY}/actions/runs/101/job/501`,
-      conclusion: "failure",
-      trackingUrl: `https://github.com/${REPOSITORY}/issues/789`,
-      reason: "Shared test fixture races during cleanup; repair tracked on main.",
-      classifiedBy: "release-operator",
-      receiptRunId: "890",
-      receiptRunAttempt: 1,
-    };
-    const client = {
-      ...scenario.client,
-      getAttemptJobs: async () => [
-        {
-          ...job(receipt.jobName, "failure"),
-          id: 501,
-          run_id: 101,
-          run_attempt: 1,
-          html_url: receipt.jobUrl,
-        },
-        {
-          ...job("openclaw/ci-gate", "failure"),
-          id: 502,
-          run_id: 101,
-          run_attempt: 1,
-        },
-      ],
-      loadFlakeClassifications: vi.fn(async () => ({
-        flakeClassifications: [receipt],
-        gateEntries: [
-          { name: "preflight", result: "success", selected: true },
-          { name: "checks-node", result: "failure", selected: true },
-          { name: "pr-fail-fast", result: "skipped", selected: false },
-        ],
-      })),
-    };
-    await expect(continueFailed(plan([scenario.selected]), "77", client)).resolves.toMatchObject({
-      action: "reran-parent",
-      reruns: [],
-      finalRunId: "77",
-    });
-    expect(scenario.counters).toMatchObject({ posts: { child: 0, parent: 1 }, verifies: 1 });
-    expect(client.loadFlakeClassifications).toHaveBeenCalledWith(
-      expect.objectContaining({ parentRunId: "77", parentRunAttempt: 1, targetSha: TARGET_SHA }),
-    );
-  });
-
   it.each([false, true])(
     "reruns the exact carried failed job once, including ambiguous response=%s",
     async (ambiguous) => {
@@ -1300,7 +1237,6 @@ describe("FRV same-parent recovery", () => {
       const selected = child(key, "101");
       let latestReads = 0;
       const client = {
-        loadFlakeClassifications: async () => ({}),
         getRun: async () =>
           runFor(
             selected,
@@ -1737,6 +1673,59 @@ describe("FRV child rerun", () => {
     );
   });
 
+  it("recovers only a failed receipt after passing workloads, then requires resealed acceptance", async () => {
+    const publisher = "Seal full release child evidence / Seal child receipt";
+    const selected = child("normalCi", "101");
+    const childRuns = new Map([["101", { attempt: 1, conclusion: "success" }]]);
+    const parent = { attempt: 1, conclusion: "failure" };
+    const client = {
+      ...controllerClient([selected], childRuns, parent),
+      getAttemptJobs: async (_id: string, attempt: number) => [
+        ...(attempt === 1 ? [{ ...job("workload"), id: 11, run_id: 101, run_attempt: 1 }] : []),
+        {
+          ...job(publisher, attempt === 1 ? "failure" : "success"),
+          id: 12 + attempt,
+          run_id: 101,
+          run_attempt: attempt,
+        },
+      ],
+      rerunJob: vi.fn(async () => {
+        childRuns.set("101", { attempt: 2, conclusion: "success" });
+      }),
+      rerunFailed: vi.fn(),
+      rerunParent: vi.fn(async () => {
+        parent.attempt = 2;
+        parent.conclusion = "success";
+      }),
+      verify: vi.fn(async () => "sealed accepted evidence"),
+    };
+    await expect(
+      continueFailed(plan([selected]), "77", client, {
+        child: "normalCi",
+        dryRun: true,
+      }),
+    ).resolves.toMatchObject({ action: "would-rerun", childRerun: { mode: "receipt" } });
+    await expect(
+      continueFailed(plan([selected]), "77", client, {
+        child: "normalCi",
+        log: vi.fn(),
+      }),
+    ).resolves.toMatchObject({
+      action: "reran-child",
+      reruns: [{ mode: "receipt", jobId: 13, sourceRunAttempt: 1, runAttempt: 2 }],
+    });
+    expect(client.rerunJob).toHaveBeenCalledExactlyOnceWith(13);
+    expect(client.rerunFailed).not.toHaveBeenCalled();
+    expect(client.verify).not.toHaveBeenCalled();
+    await expect(continueFailed(plan([selected]), "77", client)).resolves.toMatchObject({
+      action: "reran-parent",
+      finalRunId: "77",
+    });
+    expect(client.rerunJob).toHaveBeenCalledOnce();
+    expect(client.rerunFailed).not.toHaveBeenCalled();
+    expect(client.verify).toHaveBeenCalledOnce();
+  });
+
   it("refuses a rerun beyond the attempt budget before any POST", async () => {
     const scenario = rerunScenario({ childSource: [2, "failure"], childAfter: [[3, "success"]] });
     await expect(
@@ -1935,7 +1924,18 @@ describe("FRV watch completion", () => {
     await expect(poll()).resolves.toMatchObject({ complete: false });
     client.getAttemptJobs = async () => [];
     await expect(poll()).resolves.toMatchObject({ complete: false });
-    client.getAttemptJobs = async () => [{ ...job("late", "failure"), id: 7 }];
+    client.getAttemptJobs = async () => [
+      { ...job("late", "failure"), id: 7 },
+      {
+        ...job("late"),
+        conclusion: null,
+        id: 8,
+        status: "queued",
+        runner_id: null,
+        runner_name: null,
+        steps: [{ name: "mirrored step", status: "completed", conclusion: "success" }],
+      },
+    ];
     await expect(poll()).resolves.toMatchObject({ complete: true });
   });
 });

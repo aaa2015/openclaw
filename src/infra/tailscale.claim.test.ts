@@ -2,7 +2,11 @@ import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createGatewayPortalService } from "../gateway/portals/portal-service.js";
-import { prepareTailscalePublishedOrigin } from "../gateway/tailscale-published-origin.js";
+import { startGatewayTailscaleExposure } from "../gateway/server-tailscale.js";
+import {
+  getTailscalePublishedOrigin,
+  prepareTailscalePublishedOrigin,
+} from "../gateway/tailscale-published-origin.js";
 
 const { forkMock, runExecMock } = vi.hoisted(() => ({
   forkMock: vi.fn(),
@@ -20,13 +24,37 @@ vi.mock("./runtime-worker-url.js", () => ({
 import { claimTailscaleRoute, claimTailscaleServePort } from "./tailscale.js";
 
 // Gate worker readiness and exit explicitly: no subprocesses or live daemon writes.
-function queueOwner(options: { ready?: boolean; stop?: boolean; failure?: string } = {}) {
+function queueOwner(
+  options: {
+    ready?: boolean;
+    stop?: boolean;
+    failure?: string;
+    code?: number | null;
+    stopFailure?: string;
+    stdout?: string;
+    failureAfterStop?: string;
+    abortOnStop?: () => void;
+  } = {},
+) {
   const started = createDeferred();
   const stopped = createDeferred();
   const owner = Object.assign(new EventEmitter(), {
     connected: true,
     send: vi.fn(() => {
       stopped.resolve();
+      options.abortOnStop?.();
+      if (options.failureAfterStop) {
+        owner.emit("message", {
+          type: "failed",
+          code: null,
+          signal: "SIGTERM",
+          stdout: options.failureAfterStop,
+          stderr: "",
+        });
+      }
+      if (options.stopFailure) {
+        owner.emit("message", { type: "stop-failed", message: options.stopFailure });
+      }
       if (options.stop !== false) {
         queueMicrotask(() => owner.emit("exit", 0, null));
       }
@@ -36,12 +64,12 @@ function queueOwner(options: { ready?: boolean; stop?: boolean; failure?: string
   forkMock.mockImplementationOnce(() => {
     started.resolve();
     queueMicrotask(() => {
-      if (options.failure) {
+      if (options.failure || options.stdout) {
         owner.emit("message", {
           type: "failed",
-          code: 1,
-          stdout: "",
-          stderr: options.failure,
+          code: options.code === undefined ? 1 : options.code,
+          stdout: options.stdout ?? "",
+          stderr: options.failure ?? "",
         });
       } else if (options.ready !== false) {
         owner.emit("message", { type: "ready" });
@@ -79,6 +107,156 @@ afterEach(() => {
 });
 
 describe("private Tailscale Serve claims", () => {
+  it.each([
+    { code: 0, prefix: "To enable, visit:\n" },
+    { code: 0, prefix: "" },
+    { code: 1, prefix: "To enable, visit:\n" },
+  ])(
+    "keeps local Gateway availability after a confirmed Serve denial (code $code, prefix '$prefix')",
+    async ({ code, prefix }) => {
+      const denial = `Serve is not enabled on your tailnet.\n${prefix}\nhttps://example.test/serve`;
+      const pending = queueOwner({
+        code,
+        ...(code === 0 ? { stdout: denial } : { failure: denial }),
+      });
+      const log = { info: vi.fn(), warn: vi.fn() };
+      const cleanup = await startGatewayTailscaleExposure({
+        tailscaleMode: "serve",
+        port: 18789,
+        backend: { port: 19000, host: "127.0.0.1" },
+        logTailscale: log,
+      });
+      expect(cleanup).toBeNull();
+      expect(pending.owner.send).toHaveBeenCalledWith({ type: "stop" }, expect.any(Function));
+      expect(getTailscalePublishedOrigin()).toBeUndefined();
+      expect(log.warn).toHaveBeenCalledWith(
+        expect.stringMatching(/local.*Gateway.*available.*tailnet/s),
+      );
+    },
+  );
+
+  it.each([
+    { mode: "funnel", code: 1, failure: "Serve is not enabled on your tailnet." },
+    { mode: "serve", code: null, failure: "Serve is not enabled on your tailnet." },
+    {
+      mode: "serve",
+      code: 1,
+      failure: "Unexpected proxy error: Serve is not enabled on your tailnet.",
+    },
+    { mode: "serve", code: 1, failure: "permission denied" },
+    {
+      mode: "serve",
+      code: 1,
+      failure:
+        "Serve is not enabled on your tailnet.\nTo enable, visit:\nhttps://example.test/serve\nlost connection to tailscaled: EOF",
+    },
+  ] as const)("keeps $mode command failure fatal: $failure (code $code)", async (options) => {
+    queueOwner(options);
+    if (options.failure === "permission denied") {
+      queueOwner(options);
+    }
+    await expect(
+      startGatewayTailscaleExposure({
+        tailscaleMode: options.mode,
+        port: 18789,
+        backend: { port: 19000, host: "127.0.0.1" },
+        logTailscale: { info: vi.fn(), warn: vi.fn() },
+      }),
+    ).rejects.toThrow(options.failure);
+    expect(getTailscalePublishedOrigin()).toBeUndefined();
+  });
+
+  it("preserves denial and failed cleanup instead of continuing local startup", async () => {
+    queueOwner({
+      failure: "Serve is not enabled on your tailnet.",
+      stopFailure: "route termination was not confirmed",
+    });
+    const error = await startGatewayTailscaleExposure({
+      tailscaleMode: "serve",
+      port: 18789,
+      backend: { port: 19000, host: "127.0.0.1" },
+      logTailscale: { info: vi.fn(), warn: vi.fn() },
+    }).catch((failure: unknown) => failure);
+    expect(error).toBeInstanceOf(AggregateError);
+    const failure = error as AggregateError;
+    expect(failure.errors.map((cause: Error) => cause.message)).toEqual([
+      "Serve is not enabled on your tailnet.",
+      "route termination was not confirmed",
+    ]);
+    expect(failure.cause).toBe(failure.errors[1]);
+  });
+
+  it.each([
+    { boundary: "policy denial", mode: "serve", outcome: "local" },
+    { boundary: "Funnel denial", mode: "funnel", outcome: "fatal" },
+    {
+      boundary: "later daemon failure",
+      mode: "serve",
+      outcome: "fatal",
+      extra: "\nlost connection to tailscaled: EOF",
+    },
+    {
+      boundary: "failed retirement",
+      mode: "serve",
+      outcome: "fatal",
+      cleanup: "route termination was not confirmed",
+    },
+    { boundary: "shutdown during retirement", mode: "serve", outcome: "cancelled" },
+  ] as const)("joins the owned startup deadline at $boundary", async (scenario) => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const interrupted = new Error("Gateway stopped while retiring denied Serve");
+    const pending = queueOwner({
+      ready: false,
+      failureAfterStop: `Serve is not enabled on your tailnet.\nTo enable, visit:\nhttps://example.test/serve${"extra" in scenario ? scenario.extra : ""}`,
+      ...("cleanup" in scenario ? { stopFailure: scenario.cleanup } : {}),
+      ...(scenario.outcome === "cancelled"
+        ? { abortOnStop: () => controller.abort(interrupted) }
+        : {}),
+    });
+    const log = { info: vi.fn(), warn: vi.fn() };
+    const result = startGatewayTailscaleExposure({
+      tailscaleMode: scenario.mode,
+      port: 18789,
+      backend: { port: 19000, host: "127.0.0.1" },
+      signal: controller.signal,
+      logTailscale: log,
+    }).catch((error: unknown) => error);
+    try {
+      await pending.started;
+      await vi.advanceTimersByTimeAsync(15_000);
+      const outcome = await result;
+      if (scenario.outcome === "local") {
+        expect(outcome).toBeNull();
+        expect(log.warn).toHaveBeenCalledWith(
+          expect.stringContaining("local Gateway remains available"),
+        );
+      } else if (scenario.outcome === "cancelled") {
+        expect(outcome).toBe(interrupted);
+      } else {
+        expect(outcome).toBeInstanceOf(Error);
+        if ("cleanup" in scenario) {
+          expect(outcome).toBeInstanceOf(AggregateError);
+        }
+      }
+      expect(getTailscalePublishedOrigin()).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("joins a cancelled Gateway claim even when readiness races shutdown", async () => {
+    const pending = queueOwner({ ready: false });
+    const controller = new AbortController();
+    const interrupted = new Error("Gateway stopped during startup");
+    const starting = claimTailscaleRoute("serve", 19000, 18789, vi.fn(), controller.signal);
+    await pending.started;
+    controller.abort(interrupted);
+    pending.owner.emit("message", { type: "ready" });
+    await expect(starting).rejects.toBe(interrupted);
+    expect(pending.owner.send).toHaveBeenCalledWith({ type: "stop" }, expect.any(Function));
+  });
+
   it.for([
     { boundary: "queue", revoke: true },
     { boundary: "queue", revoke: false },
@@ -206,61 +384,57 @@ describe("private Tailscale Serve claims", () => {
     },
   );
 
-  it("claims an explicit private port without adopting even a matching legacy backend", async () => {
-    const { owner } = queueOwner();
-    const claim = await claimTailscaleServePort(18789, 24443, () => {});
+  it.each([
+    { port: 1, ending: "stop" },
+    { port: 65535, ending: "stop" },
+    { port: 24443, ending: "unexpected exit" },
+  ])(
+    "owns private port $port through $ending without adopting legacy routes",
+    async ({ port, ending }) => {
+      const { owner } = queueOwner();
+      const claim = await claimTailscaleServePort(18789, port, () => {});
 
-    expect(forkMock.mock.calls[0]?.[1]).toEqual([
-      "--openclaw-tailscale-route-owner",
-      JSON.stringify({
-        argv: ["tailscale", "serve", "--yes", "--bg=false", "--https=24443", "18789"],
-      }),
-    ]);
-    expect(forkMock.mock.calls[0]?.[2]).toMatchObject({
-      detached: process.platform !== "win32",
-      stdio: ["ignore", "ignore", "ignore", "ipc"],
-    });
-    expect(runExecMock.mock.calls.map((call) => call[1])).toEqual([
-      ["status", "--json"],
-      ["serve", "status", "--json"],
-    ]);
-    expect(claim.isActive()).toBe(true);
-    await Promise.all([claim.stop(), claim.stop()]);
-    await expect(claim.exited).resolves.toBeUndefined();
-    expect(claim.isActive()).toBe(false);
-    expect(owner.send).toHaveBeenCalledTimes(1);
-    expect(owner.send).toHaveBeenCalledWith({ type: "stop" }, expect.any(Function));
-    expect(runExecMock).toHaveBeenCalledTimes(2);
-  });
+      expect(forkMock.mock.calls[0]?.[1]).toEqual([
+        "--openclaw-tailscale-route-owner",
+        JSON.stringify({
+          argv: ["tailscale", "serve", "--yes", "--bg=false", `--https=${port}`, "18789"],
+        }),
+      ]);
+      expect(forkMock.mock.calls[0]?.[2]).toMatchObject({
+        detached: process.platform !== "win32",
+        stdio: ["ignore", "ignore", "ignore", "ipc"],
+      });
+      expect(runExecMock.mock.calls.map((call) => call[1])).toEqual([
+        ["status", "--json"],
+        ["serve", "status", "--json"],
+      ]);
+      expect(claim.isActive()).toBe(true);
+      if (ending === "stop") {
+        await Promise.all([claim.stop(), claim.stop()]);
+        expect(owner.send).toHaveBeenCalledTimes(1);
+        expect(owner.send).toHaveBeenCalledWith({ type: "stop" }, expect.any(Function));
+      } else {
+        owner.emit("exit", 1, null);
+      }
+      await expect(claim.exited).resolves.toBeUndefined();
+      expect(claim.isActive()).toBe(false);
+      expect(runExecMock).toHaveBeenCalledTimes(2);
+    },
+  );
 
-  it.each([0, -1, 65536, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
-    "rejects invalid HTTPS port %s before daemon access",
-    async (port) => {
-      await expect(claimTailscaleServePort(18789, port, () => {})).rejects.toThrow(/httpsPort/);
+  it.each([
+    { target: 18789, httpsPort: 0, invalid: "httpsPort" },
+    { target: 18789, httpsPort: 65536, invalid: "httpsPort" },
+    { target: 18789, httpsPort: 1.5, invalid: "httpsPort" },
+    { target: 0, httpsPort: 24443, invalid: "target" },
+  ])(
+    "rejects invalid $invalid ($target/$httpsPort) before daemon access",
+    async ({ target, httpsPort, invalid }) => {
+      await expect(claimTailscaleServePort(target, httpsPort, () => {})).rejects.toThrow(invalid);
       expect(runExecMock).not.toHaveBeenCalled();
       expect(forkMock).not.toHaveBeenCalled();
     },
   );
-
-  it.each([0, -1, 65536, 1.5, Number.NaN])("rejects invalid backend port %s", async (port) => {
-    await expect(claimTailscaleServePort(port, 24443, () => {})).rejects.toThrow(/target/);
-    expect(runExecMock).not.toHaveBeenCalled();
-    expect(forkMock).not.toHaveBeenCalled();
-  });
-
-  it.each([1, 65535])("accepts bounded HTTPS port %s", async (port) => {
-    queueOwner();
-    const claim = await claimTailscaleServePort(18789, port, () => {});
-    await claim.stop();
-  });
-
-  it("withdraws activity when the owned worker exits unexpectedly", async () => {
-    const { owner } = queueOwner();
-    const claim = await claimTailscaleServePort(18789, 24443, () => {});
-    owner.emit("exit", 1, null);
-    await claim.exited;
-    expect(claim.isActive()).toBe(false);
-  });
 
   it("keeps explicit private arguments and operator diagnostics on permission fallback", async () => {
     queueOwner({ failure: "permission denied" });

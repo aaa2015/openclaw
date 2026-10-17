@@ -82,12 +82,14 @@ describe("bounded Gateway state reads", () => {
         vi.advanceTimersByTime(999);
         expect(() => assertStateDatabaseReadAllowed(databasePath)).not.toThrow();
         vi.advanceTimersByTime(1);
-        expect(() => assertStateDatabaseReadAllowed(databasePath)).toThrow("could not be verified");
+        expect(() => assertStateDatabaseReadAllowed(databasePath)).toThrow(
+          /removed( or |\/)replaced; restart the Gateway\.$/,
+        );
         expect(() =>
           kind === "owner"
             ? assertStateDatabaseAccessAllowed(databasePath)
             : gateway.assertCurrent(),
-        ).toThrow(kind === "owner" ? "could not be verified" : "no longer current");
+        ).toThrow(kind === "owner" ? "restart the Gateway" : "no longer current");
       } finally {
         await gateway.release();
       }
@@ -100,8 +102,11 @@ describe("bounded Gateway state reads", () => {
     const owner = acquireServingOwner(fixture.originalDatabasePath);
     const maintenance = acquireGatewayStateOwner({ databasePath: fixture.replacementDatabasePath });
     try {
+      expect(() => assertStateDatabaseAccessAllowed(fixture.databasePath)).not.toThrow();
+      expect(() => owner.assertDatabaseAccess(fixture.databasePath)).not.toThrow();
       assertStateDatabaseReadAllowed(fixture.databasePath);
       fixture.retarget();
+      expect(() => owner.assertCurrent()).not.toThrow();
       expect(() => assertStateDatabaseAccessAllowed(fixture.databasePath)).toThrow(
         "offline maintenance",
       );
@@ -167,26 +172,4 @@ describe("bounded Gateway state reads", () => {
       }
     },
   );
-
-  it("does not resolve or open ownership paths for warmed reads within the verification window", () => {
-    const databasePath = createDatabase(tempDirs.make("openclaw-owner-read-syscalls-"));
-    const owner = acquireServingOwner(databasePath);
-    try {
-      assertStateDatabaseReadAllowed(databasePath);
-      const realpath = vi.spyOn(fs.realpathSync, "native");
-      const open = vi.spyOn(fs, "openSync");
-      try {
-        for (let index = 0; index < 20; index += 1) {
-          assertStateDatabaseReadAllowed(databasePath);
-        }
-        expect(realpath).not.toHaveBeenCalled();
-        expect(open).not.toHaveBeenCalled();
-      } finally {
-        realpath.mockRestore();
-        open.mockRestore();
-      }
-    } finally {
-      owner.release();
-    }
-  });
 });

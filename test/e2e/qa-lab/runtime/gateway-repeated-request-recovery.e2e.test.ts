@@ -53,6 +53,7 @@ type ClassifiedMockRequest = {
   model: unknown;
   continuation: boolean;
   prompt: "recovery" | "queued" | "other" | "missing";
+  stallGuidance: boolean;
   outcome: unknown;
   errorCode: unknown;
 };
@@ -63,11 +64,17 @@ const QUEUED_PROMPT =
   "Repeated request queued reply Gateway QA check. Reply with the fixture marker.";
 const QUEUED_REPLY_MARKER = "GATEWAY_REPEATED_REQUEST_QUEUED_OK";
 const RECOVERY_REASON = "repeated_model_requests_without_progress";
+const STALL_GUIDANCE_NEEDLE = "previous turn stopped making progress";
 // The opt-in product proof owns the full 360-second production-floor assertion.
 // This always-on state-machine proof uses the same heartbeat path with QA timings.
 const QA_RECOVERY_BOUND_MS = 30_000;
 const MODEL_REQUEST_ALLOWANCE_SECONDS = 45;
-const ORDINARY_RESPONSE_PAUSE_MS = 8_000;
+// Recovery may abort once cumulative no-progress age, counted from the first
+// retry, reaches the 45-second allowance. This branch does not treat SSE
+// keepalives as request activity, so the stalled fallback still times out 45
+// seconds after it starts. Three 15-second retries put a 45-second window
+// between those points, which always contains one 30-second diagnostic heartbeat.
+const ORDINARY_RESPONSE_PAUSE_MS = 15_000;
 const STALLED_RESPONSE_PAUSE_MS = 90_000;
 const RECOVERY_PROGRESS_INTERVAL_MS = 30_000;
 const HISTORY_RETRY_TIMEOUT_MS = 60_000;
@@ -254,6 +261,8 @@ async function readClassifiedMockRequests(mockBaseUrl: string): Promise<Classifi
                 ? "recovery"
                 : "other"
             : "missing",
+        stallGuidance:
+          typeof allInputText === "string" && allInputText.includes(STALL_GUIDANCE_NEEDLE),
         outcome,
         errorCode,
       })),
@@ -352,7 +361,7 @@ describe("Gateway repeated-request recovery", () => {
       expect(gateway.runtimeEnv.QA_DIAGNOSTIC_STUCK_SESSION_ABORT_MS).toBe(
         String(QA_RECOVERY_BOUND_MS),
       );
-      expect(gateway.runtimeEnv.OPENCLAW_QA_PARENT_PID).toBeTruthy();
+      expect(gateway.runtimeEnv.OPENCLAW_GATEWAY_HOST_LIFELINE).toBe("stdin");
 
       const baseline = await readStability(gateway);
       const baselineSeq = typeof baseline.lastSeq === "number" ? baseline.lastSeq : 0;
@@ -391,8 +400,8 @@ describe("Gateway repeated-request recovery", () => {
       expect(queued).toMatchObject({ status: "started" });
       expect(typeof queued.runId).toBe("string");
 
-      // Repeated-request recovery owns semantic stagnation independently of the
-      // current provider request's deadline. Observe its settlement before queue drain.
+      // Repeated-request recovery aborts the stalled fallback once cumulative
+      // no-progress age reaches the request allowance. Observe its settlement before queue drain.
       const events = await waitForStability(
         gateway,
         baselineSeq,
@@ -490,8 +499,10 @@ describe("Gateway repeated-request recovery", () => {
           errorCode: "response_failed_no_details",
         }),
       ]);
+      // The stalled turn never replied, so the queued request answers with the
+      // interruption guidance instead of a retry notice or an extra recovery turn.
       expect(requests.filter((request) => request.prompt === "queued")).toEqual([
-        expect.objectContaining({ outcome: "success" }),
+        expect.objectContaining({ outcome: "success", stallGuidance: true }),
       ]);
 
       const finalEvents = (await readStability(gateway, baselineSeq)).events ?? [];

@@ -208,6 +208,17 @@ export function readDeferredPluginMigrations(
   return read(({ db }) => readPendingMigrationRecords(db), options) ?? [];
 }
 
+/** Prime resolution in this module before the updater replaces its package. */
+export async function prepareDeferredPluginMigrationRuntime(): Promise<void> {
+  const { prepareOpenClawStateLeaseWorkerRuntime } =
+    await import("../state/openclaw-state-lease-worker-operation.js");
+  await Promise.all([
+    import("../state/openclaw-state-worker-store.js"),
+    import("../plugins/plugin-lifecycle-lease.js"),
+    prepareOpenClawStateLeaseWorkerRuntime(),
+  ]);
+}
+
 /** Keep asynchronous config inspection off the main thread without creating state. */
 export async function readDeferredPluginMigrationsAsync(
   options: Parameters<typeof readDeferredPluginMigrations>[0] = {},
@@ -255,23 +266,6 @@ export function readDeferredPluginMigrationCompletions(
       );
     }, options) ?? []
   );
-}
-
-export async function readDeferredPluginMigrationCompletionsAsync(
-  options: Parameters<typeof readDeferredPluginMigrations>[0] = {},
-) {
-  const context = captureOpenClawStateWorkerContext(options);
-  const { runOpenClawStateWorkerOperation } =
-    await import("../state/openclaw-state-worker-store.js");
-  context.admission.assertCurrent();
-  const completed = await runOpenClawStateWorkerOperation(
-    context,
-    (scope) =>
-      scope.execute({ type: "plugins.deferredMigrations.completions.read", input: undefined }),
-    { existingOnly: true },
-  );
-  context.admission.assertCurrent();
-  return completed ?? [];
 }
 
 /** Bind asynchronous settlement to the same pending records, including newly added owners. */
@@ -385,10 +379,11 @@ export function formatDeferredPluginMigration(
   env: NodeJS.ProcessEnv = process.env,
 ): string {
   const retry = pending.command === "openclaw doctor --fix" ? "" : ', then "openclaw doctor --fix"';
-  const updating =
-    isTruthyEnvValue(env.OPENCLAW_UPDATE_IN_PROGRESS) ||
-    isTruthyEnvValue(env.OPENCLAW_UPDATE_POST_CORE_CONVERGENCE);
-  const next = updating
+  // This formatter also ships in the minimal PR bootstrap, without Doctor command modules.
+  const packageSwap =
+    isTruthyEnvValue(env.OPENCLAW_UPDATE_IN_PROGRESS) &&
+    !isTruthyEnvValue(env.OPENCLAW_UPDATE_POST_CORE_CONVERGENCE);
+  const next = packageSwap
     ? `Let the current update or repair finish. If this warning remains afterward, run "${pending.command}"${retry} to retry the upgrade.`
     : `Run "${pending.command}"${retry} to retry the upgrade.`;
   return `Plugin "${pending.pluginId}" data/settings upgrade is unfinished: ${pending.reason} Your existing data and settings have been kept. ${next}`;
@@ -477,7 +472,7 @@ export async function recordDeferredPluginMigrations(
   });
   const { withPluginLifecycleLease } = await import("../plugins/plugin-lifecycle-lease.js");
   const { runWithOpenClawStateLeaseWorker } =
-    await import("../state/openclaw-state-lease-worker-storage.js");
+    await import("../state/openclaw-state-lease-worker-operation.js");
   return withPluginLifecycleLease({ env: params.env }, async (lease) => {
     const context = captureOpenClawStateWorkerContext({
       env: params.env,

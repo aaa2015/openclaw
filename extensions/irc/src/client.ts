@@ -1,5 +1,6 @@
 import net from "node:net";
 import tls from "node:tls";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withTimeout } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -12,6 +13,12 @@ import {
 const IRC_ERROR_CODES = new Set(["432", "464", "465"]);
 const IRC_NICK_COLLISION_CODES = new Set(["433", "436"]);
 const IRC_MAX_LINE_BYTES = 512;
+// Recipients see our line with the server's `:nick!user@host ` prefix in front, and 512 bytes
+// bounds that relayed line too: servers truncate it or reject the send outright (Ergo answers
+// 417 "Line too long to be relayed without truncation"). Our user@host is only as long as the
+// server makes it, so reserve its ceiling: `~` + USERLEN 10, and HOSTLEN 63.
+const IRC_MAX_RELAY_USER_BYTES = 11;
+const IRC_MAX_RELAY_HOST_BYTES = 63;
 
 function takeIrcPrivmsgChunk(text: string, maxChars: number, maxBytes: number): string {
   let end = 0;
@@ -45,11 +52,7 @@ function takeIrcPrivmsgChunk(text: string, maxChars: number, maxBytes: number): 
 
 type IrcPrivmsgEvent = {
   senderNick: string;
-  senderUser?: string;
-  senderHost?: string;
   connectedNick: string;
-  target: string;
-  text: string;
   rawLine: string;
 };
 
@@ -162,20 +165,13 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
 
   socket.setEncoding("utf8");
 
-  let resolveReady: (() => void) | null = null;
-  let rejectReady: ((error: Error) => void) | null = null;
-  const readyPromise = new Promise<void>((resolve, reject) => {
-    resolveReady = resolve;
-    rejectReady = reject;
-  });
+  const readyDeferred = createDeferred<void>();
 
   const fail = (err: unknown) => {
     const error = toIrcError(err);
     options.onError?.(error);
-    if (!ready && rejectReady) {
-      rejectReady(error);
-      rejectReady = null;
-      resolveReady = null;
+    if (!ready) {
+      readyDeferred.reject(error);
     }
   };
 
@@ -240,7 +236,12 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
     if (!cleaned) {
       throw new Error("Message must be non-empty for IRC sends");
     }
-    const lineOverheadBytes = Buffer.byteLength(`PRIVMSG ${normalizedTarget} :\r\n`, "utf8");
+    const relayPrefixBytes =
+      Buffer.byteLength(`:${currentNick}!@ `, "utf8") +
+      IRC_MAX_RELAY_USER_BYTES +
+      IRC_MAX_RELAY_HOST_BYTES;
+    const lineOverheadBytes =
+      relayPrefixBytes + Buffer.byteLength(`PRIVMSG ${normalizedTarget} :\r\n`, "utf8");
     const maxChunkBytes = IRC_MAX_LINE_BYTES - lineOverheadBytes;
     // Encode the original text with the reference so escapes are not decoded twice.
     let remaining = replyTo ? sanitizeIrcOutboundText(`${text}\n\n[reply:${replyTo}]`) : cleaned;
@@ -355,9 +356,7 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
             fail(err);
           }
         }
-        resolveReady?.();
-        resolveReady = null;
-        rejectReady = null;
+        readyDeferred.resolve();
         continue;
       }
 
@@ -379,11 +378,7 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
           void Promise.resolve(
             options.onPrivmsg({
               senderNick,
-              senderUser: prefix.user ? prefix.user.trim() : undefined,
-              senderHost: prefix.host ? prefix.host.trim() : undefined,
               connectedNick: currentNick,
-              target,
-              text,
               rawLine,
             }),
           ).catch((error: unknown) => {
@@ -440,7 +435,7 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
   }
 
   try {
-    await withTimeout(readyPromise, timeoutMs, "IRC connect");
+    await withTimeout(readyDeferred.promise, timeoutMs, "IRC connect");
   } catch (error) {
     close();
     throw error;
