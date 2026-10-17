@@ -1,4 +1,3 @@
-// Maintains plugin manifest lookup tables for discovery and runtime planning.
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
@@ -351,6 +350,9 @@ export function buildPluginManifestRegistry(
                 manifest: {
                   id: candidate.idHint,
                   configSchema: { type: "object", additionalProperties: false },
+                  // A standalone file has nowhere to declare activation; listing it in
+                  // plugins.load.paths is the startup opt-in. Enablement policy still applies.
+                  activation: { onStartup: true },
                 },
                 manifestPath: candidate.source,
               }

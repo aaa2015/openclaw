@@ -32,7 +32,11 @@ preserves unknown operator edits and uncertain definitions for operator review.
 Other command or credential changes still require interactive confirmation.
 After successful standalone `openclaw doctor --fix`, an already stopped managed
 Gateway starts and verifies readiness when its service targets the current
-installation. Update-time Doctor leaves activation with the updater. A stopped
+installation and final inspection positively verifies its ownership and offline
+state. If that inspection fails, times out, or leaves ownership uncertain, Doctor
+records the reason and leaves the service stopped. Inspect it with
+`openclaw gateway status --deep` before starting it manually.
+Update-time Doctor leaves activation with the updater. A stopped
 service targeting another installation keeps its definition and stop state; run
 the reported profile-aware `openclaw gateway install --force` command from the
 intended installation to reconcile it (installation may start the service).
@@ -56,12 +60,32 @@ LaunchAgent registration so its KeepAlive policy can recover; the error reports
 whether the job is loaded and gives a recovery command if bootstrap also fails.
 An ambiguous `kickstart` error followed by a probe that confirms the job is absent
 uses bootstrap recovery; successful activation then completes normally. A failure
-for a job that remains loaded stays visible.
+for a job that remains loaded stays visible. Bootstrap repair also accepts an
+operation-in-progress response when native inspection verifies that the job is
+loaded, without restarting a healthy Gateway. A stopped job is kickstarted before
+repair reports success. Persistent bootstrap I/O failures remain visible and
+require service diagnostics.
 
 Doctor rechecks update admission after acquiring both maintenance coordinators.
 If it must cancel before repair starts, it reverses its own stop while its native
 service custody remains valid. Normal post-repair restoration still requires
 current update admission.
+
+During service inspection, Doctor reuses already recorded update continuation
+receipts after rechecking live update ownership. This avoids repeating full
+database integrity scans for unchanged receipts within the service manager's
+inspection deadline. New continuation or takeover receipts still use the
+validated ledger writer.
+
+On Linux, nested service-manager inspections share deadline accounting that
+excludes synchronous ownership and admission checks. Slow database inspection
+therefore does not consume the manager I/O allowance. Every authority check
+still runs; manager calls, cancellation, and service stop and drain deadlines
+remain bounded. Database inspection can still increase the total command time.
+
+Once Doctor owns maintenance, it checks the update requester's current authority
+within that same ownership scope. Its own maintenance window does not trigger a
+lock wait or an offline-maintenance refusal; requester revocation still stops repair.
 
 If Doctor's output pipe closes (for example, `openclaw doctor --fix | head -20`),
 or Doctor receives SIGINT, SIGTERM, or SIGPIPE during maintenance, it waits for

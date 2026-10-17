@@ -55,6 +55,7 @@ import {
   getObservedBrowserStateForPage,
   normalizeCdpUrl,
 } from "./pw-session-state.js";
+import { guardHeadlessContexts } from "./pw-session-webauthn.js";
 import {
   BROWSER_REF_MARKER_ATTRIBUTE,
   readDocumentIdentitiesForPage,
@@ -146,14 +147,10 @@ export async function closePlaywrightBrowserConnection(opts?: { cdpUrl?: string 
 }
 
 function cdpSocketNeedsAttach(wsUrl: string): boolean {
-  try {
-    const pathname = new URL(wsUrl).pathname;
-    return (
-      pathname === "/cdp" || pathname.endsWith("/cdp") || pathname.includes("/devtools/browser/")
-    );
-  } catch {
-    return false;
-  }
+  const pathname = URL.parse(wsUrl)?.pathname ?? "";
+  return (
+    pathname === "/cdp" || pathname.endsWith("/cdp") || pathname.includes("/devtools/browser/")
+  );
 }
 
 async function tryTerminateExecutionViaCdp(opts: {
@@ -289,7 +286,7 @@ async function readPagesViaPlaywright(
     requireCompleteTargetList?: boolean;
   },
   signal: AbortSignal,
-): Promise<PlaywrightPageEnumeration> {
+): Promise<Array<{ targetId: string; title: string; url: string; type: "page" }>> {
   return await withPlaywrightSafeReadReconnect(
     { cdpUrl: opts.cdpUrl, ssrfPolicy: opts.ssrfPolicy, signal, engine: opts.engine },
     async (browser) => {
@@ -440,10 +437,10 @@ async function readPagesViaPlaywright(
             (opts.requireCompleteTargetList || resolvedPages.length === 0) &&
             pageResults.some((result) => result.status === "unresolved")
           ) {
-            return { status: "unavailable", reason: "target-identity-unresolved" };
+            throw new Error("Playwright page target identities are temporarily unavailable.");
           }
           if (!remainingTargetIds?.size) {
-            return { status: "available", pages: resolvedPages };
+            return resolvedPages;
           }
           await publication.promise;
         }
@@ -460,13 +457,6 @@ async function readPagesViaPlaywright(
     },
   );
 }
-
-type PlaywrightPageEnumeration =
-  | {
-      status: "available";
-      pages: Array<{ targetId: string; title: string; url: string; type: "page" }>;
-    }
-  | { status: "unavailable"; reason: "target-identity-unresolved" };
 
 /** List pages through the persistent Playwright connection. */
 export async function listPagesViaPlaywright(opts: {
@@ -505,14 +495,7 @@ export async function listPagesViaPlaywright(opts: {
     timer.unref?.();
   }
   try {
-    const enumeration = await Promise.race([
-      readPagesViaPlaywright(opts, controller.signal),
-      cancelled.promise,
-    ]);
-    if (enumeration.status === "unavailable") {
-      throw new Error("Playwright page target identities are temporarily unavailable.");
-    }
-    return enumeration.pages;
+    return await Promise.race([readPagesViaPlaywright(opts, controller.signal), cancelled.promise]);
   } finally {
     if (timer) {
       clearTimeout(timer);
@@ -534,6 +517,8 @@ export async function createPageViaPlaywright(
     assertCurrent?: () => void;
     /** Own an empty context; never reuse profile cookies for a session-scoped dashboard. */
     isolatedContext?: true;
+    /** Launch-owner fact for managed headless Chromium. */
+    headless?: true;
   } & BrowserNavigationPolicyOptions,
 ): Promise<PlaywrightOwnedPage> {
   const assertCurrent = () => {
@@ -551,7 +536,7 @@ export async function createPageViaPlaywright(
     signal: opts.signal,
   });
   assertCurrent();
-  const { browser, engine } = await connectBrowser(
+  const { browser, engine, headless } = await connectBrowser(
     opts.cdpUrl,
     opts.cdpPolicy ?? opts.ssrfPolicy,
     undefined,
@@ -587,6 +572,10 @@ export async function createPageViaPlaywright(
   try {
     assertCurrent();
     ensureContextState(context);
+    if (headless || opts.headless) {
+      await guardHeadlessContexts([context]);
+      assertCurrent();
+    }
     page = await context.newPage();
     assertCurrent();
     ensurePageState(page);

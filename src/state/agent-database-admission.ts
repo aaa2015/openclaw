@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import type { ErrorShape } from "../../packages/gateway-protocol/src/schema/frames.js";
 import {
   listAgentIds,
   tryResolveAmbientOwnerAgentId,
@@ -8,6 +9,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { formatAgentDatabaseOwnershipRepairHint } from "../infra/state-migrations.agent-owner-guidance.js";
+import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
@@ -32,6 +34,19 @@ export type AgentDatabaseAdmissionRefusal = {
 );
 
 type AdmissionOptions = { env?: NodeJS.ProcessEnv };
+
+export function createAgentDatabaseAdmissionErrorShape(
+  refusal: AgentDatabaseAdmissionRefusal,
+): ErrorShape {
+  const retryable = refusal.code === "agent-database-inspection-pending";
+  return {
+    code: "UNAVAILABLE",
+    message: `${refusal.reason}\n${refusal.repairHint}`,
+    details: refusal,
+    retryable,
+    ...(retryable ? { retryAfterMs: 250 } : {}),
+  };
+}
 
 // Refusals are public protocol objects. Keep inspection causes private to the admission owner.
 const refusalCauses = new WeakMap<AgentDatabaseAdmissionRefusal, unknown>();
@@ -58,14 +73,21 @@ export function createAgentDatabaseInspectionRefusal(params: {
   pending?: boolean;
   cause?: unknown;
 }): AgentDatabaseAdmissionRefusal {
+  // The worker retains these native codes when flattening its snapshot error.
+  const candidateSnapshotCapacity =
+    resolveUpdateRehearsalRoot(process.env) &&
+    params.reason.includes("creating its private snapshot:") &&
+    /(?:code=(?:ENOSPC|EDQUOT)\b|errcode=13\b)/u.test(params.reason);
   const refusal: AgentDatabaseAdmissionRefusal = {
     agentId: params.agentId,
     paths: params.paths,
     code: params.pending ? "agent-database-inspection-pending" : "agent-database-inspection-failed",
     reason: params.reason,
-    repairHint: params.pending
-      ? 'Sessions remain unavailable until background inspection and preparation finish. If they cannot complete, stop the Gateway, run "openclaw doctor --fix", and restart.'
-      : 'Sessions remain unavailable. Stop the Gateway, run "openclaw doctor --fix" to inspect and repair this agent database, and restart.',
+    repairHint: candidateSnapshotCapacity
+      ? "Free space in the reported snapshot cache, then retry the update. This candidate snapshot failure does not require repairing the serving database."
+      : params.pending
+        ? 'Sessions remain unavailable until background inspection and preparation finish. If they cannot complete, stop the Gateway, run "openclaw doctor --fix", and restart.'
+        : 'Sessions remain unavailable. Stop the Gateway, run "openclaw doctor --fix" to inspect and repair this agent database, and restart.',
   };
   refusalCauses.set(refusal, params.cause);
   return refusal;

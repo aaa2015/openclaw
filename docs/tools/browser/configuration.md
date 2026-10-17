@@ -84,6 +84,10 @@ open, opened outside OpenClaw, or otherwise have unknown ownership. The
 sessions. Changes apply on the next sweep without restarting the browser;
 disabling it does not disable explicit session lifecycle cleanup.
 
+Periodic cleanup belongs to the Browser plugin service and continues after the
+request that first started browser control ends. Stopping or reloading that
+service cancels future sweeps and waits for active cleanup to finish.
+
 OpenClaw-managed Chrome also applies a separate, best-effort cap of eight page
 tabs when opening a tab. This cap is independent of `browser.tabCleanup`;
 remote and attach-only profiles do not use it.
@@ -219,7 +223,6 @@ main model can read the screenshot directly.
 - `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork` is off by default; enable only when private-network browser access is intentionally trusted.
 - `browser.ssrfPolicy.allowedHostnames` grants exact hosts while the rest of the private network remains blocked.
 - `browser.ssrfPolicy.allowRfc2544BenchmarkRange` and `browser.ssrfPolicy.allowIpv6UniqueLocalRange` narrowly allow trusted fake-IP proxy ranges.
-- `browser.ssrfPolicy.allowPrivateNetwork` remains supported as a legacy alias.
 
 </Accordion>
 
@@ -258,6 +261,9 @@ main model can read the screenshot directly.
 - Headless managed Chrome still uses the conservative `--disable-gpu` default.
   The diagnostics do not enable acceleration, add a global acceleration setting,
   or grant sandbox browser device access.
+- Headless Chromium cannot show Chrome's passkey dialog, so OpenClaw answers
+  passkey requests in headless browsers as dismissed and the page stays usable.
+  See [Passkeys in headless browsers](/tools/browser-login#passkeys-in-headless-browsers).
 - `executablePath` can be set globally or per local managed profile. Per-profile values override `browser.executablePath`, so different managed profiles can launch different Chromium-based browsers. Both forms accept `~` for your OS home directory.
 - Default profile is `openclaw` (managed standalone). Use `defaultProfile: "user"` to opt into the signed-in user browser.
 - Auto-detect order: system default browser if Chromium-based; otherwise Chrome, Brave, Edge, Chromium, Chrome Canary.

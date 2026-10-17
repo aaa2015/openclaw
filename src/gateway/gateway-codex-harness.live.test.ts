@@ -13,6 +13,7 @@ import type {
   SessionsCatalogListResult,
   ToolsInvokeResult,
 } from "../../packages/gateway-protocol/src/index.js";
+import { assertGatewayAgentsAdmitted } from "../../test/helpers/gateway-agent-admission.js";
 import {
   verifyCodexNativeSubagentBridgeProbe,
   withCodexNativeThreadReader,
@@ -32,6 +33,7 @@ import {
   formatAssistantTextPreview,
   createCodexHarnessEventCapture,
   readCodexNativeUsageSnapshots,
+  readCodexHarnessSessionId,
   CODEX_HARNESS_CONTEXT_EVENT_PREFIXES,
   type CapturedAgentEvent,
   type CodexNativeUsageSnapshot,
@@ -421,23 +423,6 @@ async function assertCodexHarnessSessionSelection(params: {
   expect(row?.thinkingLevel).toBe(
     params.preserveNativeTurnSettings ? undefined : CODEX_HARNESS_THINKING,
   );
-}
-
-async function readCodexHarnessSessionId(params: {
-  client: GatewayClient;
-  sessionKey: string;
-}): Promise<string> {
-  // The live reset proof must distinguish logical generation rollover from
-  // physical session-id rotation, so read the persisted row through Gateway.
-  const result: {
-    sessions?: Array<{ key?: string; sessionId?: string }>;
-  } = await params.client.request("sessions.list", {
-    includeGlobal: true,
-    limit: 200,
-  });
-  const sessionId = result.sessions?.find((entry) => entry.key === params.sessionKey)?.sessionId;
-  expect(sessionId, `expected sessionId for ${params.sessionKey}`).toBeTypeOf("string");
-  return sessionId as string;
 }
 
 async function readCodexHarnessSessionUsageFreshness(params: {
@@ -1479,6 +1464,15 @@ function randomBitmapTextToken(length = 6): string {
   return [...randomBytes(length)].map((byte) => alphabet[byte % alphabet.length]).join("");
 }
 
+function randomSpelledWordsToken(count: number): string {
+  // Models sometimes drop trailing characters when echoing long hex runs; spelled words echo intact.
+  const words = (
+    "ALPHA BRAVO CHARLIE DELTA ECHO FOXTROT GOLF HOTEL INDIA JULIET KILO LIMA MIKE " +
+    "NOVEMBER OSCAR PAPA QUEBEC ROMEO SIERRA TANGO UNIFORM VICTOR WHISKEY XRAY YANKEE ZULU"
+  ).split(" ");
+  return [...randomBytes(count)].map((byte) => words[byte % words.length]).join("-");
+}
+
 function findGuardianReviewStatus(events: CapturedAgentEvent[]): "approved" | "denied" | undefined {
   const status = events.findLast((event) => event.data?.phase === "completed" && event.data?.status)
     ?.data?.status;
@@ -1966,12 +1960,13 @@ describeLive("gateway live (Codex harness)", () => {
         if (!firstClient || !secondClient) {
           throw new Error("missing paired steering clients");
         }
+        await assertGatewayAgentsAdmitted(firstClient, ["dev"]);
         logCodexLiveStep("cross-device-steering-clients-connected");
         for (const mode of ["explicit", "inherited"] as const) {
           const sessionKey = `agent:dev:live-codex-steering-${mode}`;
           const runId = `steering-root-${randomUUID()}`;
           const steerRunId = `steering-input-${randomUUID()}`;
-          const marker = `CODEX-STEER-${randomBytes(8).toString("hex").toUpperCase()}`;
+          const marker = `CODEX-STEER-${randomSpelledWordsToken(4)}`;
           const startedPath = path.join(workspace, `${mode}-started`);
           const releasePath = path.join(workspace, `${mode}-release`);
           const commandPath = path.join(workspace, `${mode}-wait.cjs`);
@@ -2192,7 +2187,7 @@ describeLive("gateway live (Codex harness)", () => {
         });
         const connect = async () => {
           await instance.startGateway();
-          return await connectTestGatewayClient({
+          client = await connectTestGatewayClient({
             url: instance.url,
             token,
             deviceIdentity,
@@ -2202,6 +2197,8 @@ describeLive("gateway live (Codex harness)", () => {
             caps: CODEX_HARNESS_CLIENT_CAPS,
             onEvent,
           });
+          await assertGatewayAgentsAdmitted(client, ["dev"]);
+          return client;
         };
         client = await connect();
         const catalog = await client.request<SessionsCatalogListResult>("sessions.catalog.list", {
@@ -2304,8 +2301,7 @@ describeLive("gateway live (Codex harness)", () => {
     CODEX_HARNESS_TIMEOUT_MS,
   );
 
-  // Waived for 2026.9.7 by the release lead under Peter's 00:40 PT live/e2e waiver decision; see FRV 36534008742 job 109300784066.
-  it.skip(
+  it(
     "runs gateway agent turns through the plugin-owned Codex app-server harness",
     async (context) => {
       const modelKey = process.env.OPENCLAW_LIVE_CODEX_HARNESS_MODEL ?? DEFAULT_CODEX_MODEL;
@@ -2424,6 +2420,7 @@ describeLive("gateway live (Codex harness)", () => {
         });
         activeApprovalClient = client;
         logCodexLiveStep("client-connected");
+        await assertGatewayAgentsAdmitted(client, ["dev"]);
         const activeClient = client;
 
         const maxAttempts = CODEX_HARNESS_SUBAGENT_PROBE ? 1 : 2;
@@ -2839,6 +2836,7 @@ describeLive("gateway live (Codex harness)", () => {
               onEvent: captureGatewayEvent,
             });
             activeApprovalClient = client;
+            await assertGatewayAgentsAdmitted(client, ["dev"]);
             await assertCodexHarnessSessionSelection({
               client,
               modelKey,

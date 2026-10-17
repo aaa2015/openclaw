@@ -3,10 +3,15 @@ import { UPDATE_RUN_PHASES } from "../../../packages/gateway-protocol/src/update
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { formatDurationPrecise } from "../../infra/format-time/format-duration.ts";
+import {
+  StateDatabaseAdmissionPendingError,
+  StateDatabaseOfflineMaintenanceError,
+} from "../../infra/gateway-state-owner-record.js";
 import { formatUpdateDoctorLintFinding } from "../../infra/update-doctor-lint.js";
 import { formatUpdateFailureFact } from "../../infra/update-failure-facts-format.js";
 import { writeUpdateRunReportArtifact } from "../../infra/update-failure-report-artifact.js";
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
+import { getUpdateRunForProgressAsync } from "../../infra/update-run-reader.js";
 import {
   toPublicUpdateRun,
   updateStepDiagnostics,
@@ -34,6 +39,16 @@ const activeUpdateProgress = new Map<
 >();
 const UPDATE_PROGRESS_POLL_MS = 250;
 const UPDATE_STEP_NOTICE_MS = 30_000;
+
+function isProgressMaintenanceContention(error: unknown): boolean {
+  if (error instanceof AggregateError) {
+    return error.errors.length > 0 && error.errors.every(isProgressMaintenanceContention);
+  }
+  return (
+    error instanceof StateDatabaseAdmissionPendingError ||
+    error instanceof StateDatabaseOfflineMaintenanceError
+  );
+}
 
 // These CLI-only callbacks can render the row just committed by their ledger owner.
 export type UpdateDisplayProgress = {
@@ -77,6 +92,9 @@ export function createUpdateProgress(
   let timer: ReturnType<typeof setTimeout> | undefined;
   let stepNotice: ReturnType<typeof setInterval> | undefined;
   let currentPhase: UpdateRunPhase | undefined;
+  let currentRecord: UpdateRunRecord | undefined;
+  let pendingRead: AbortController | undefined;
+  let polling = true;
   let observation: "active" | "suspended" | "disposed" = "active";
   const seenPhases = new Set<UpdateRunPhase>();
   const stop = () => {
@@ -93,15 +111,17 @@ export function createUpdateProgress(
       timer = undefined;
     }
   };
-  // Candidate migrations can advance the ledger beyond this process's reader.
-  // Step callbacks and final cleanup must respect the same fence as the timer.
-  const read = () =>
-    observation === "active" && run ? readDisplayRecord(run.runId, run.env, "progress") : undefined;
+  const pausePolling = () => {
+    polling = false;
+    clearTimer();
+    pendingRead?.abort();
+  };
   const renderRecord = (record: UpdateRunRecord | undefined) => {
     // Doctor's unbound spinner does not observe ledger phases, even after a write.
     if (observation !== "active" || !run || !record) {
       return;
     }
+    currentRecord = record;
     currentPhase = record.phase;
     // A child process can cross several phases between reads. Replay the recorded
     // timeline rather than losing fast transitions or inferring unobserved phases.
@@ -128,7 +148,7 @@ export function createUpdateProgress(
     } finally {
       if (terminal) {
         observation = "disposed";
-        clearTimer();
+        pausePolling();
         if (run && activeUpdateProgress.get(run.runId)?.finish === finalize) {
           activeUpdateProgress.delete(run.runId);
         }
@@ -136,31 +156,53 @@ export function createUpdateProgress(
       stop();
     }
   };
-  const poll = () => {
+  const poll = async () => {
     timer = undefined;
-    const record = read();
-    renderRecord(record);
-    if (record?.status === "running") {
-      // The CLI owns this poll only for its active operation; fresh-process
-      // finalization and gateway verification write the same ledger row.
-      timer = setTimeout(poll, UPDATE_PROGRESS_POLL_MS);
-      timer.unref?.();
+    if (!polling || pendingRead || observation !== "active" || !run) {
+      return;
+    }
+    const controller = new AbortController();
+    pendingRead = controller;
+    try {
+      const record = await getUpdateRunForProgressAsync(
+        run.runId,
+        { env: run.env },
+        controller.signal,
+      );
+      // Activation can retire this reader while its native query is settling.
+      if (!controller.signal.aborted) {
+        if (!currentRecord || !record || record.updatedAtMs >= currentRecord.updatedAtMs) {
+          renderRecord(record);
+        }
+        polling = record?.status === "running";
+      }
+    } catch (error) {
+      // Doctor children hold their own custody; observation waits without borrowing it.
+      if (!controller.signal.aborted && !isProgressMaintenanceContention(error)) {
+        polling = false;
+        defaultRuntime.error(`Update progress history unavailable: ${formatErrorMessage(error)}`);
+      }
+    } finally {
+      pendingRead = undefined;
+      if (polling && observation === "active") {
+        timer = setTimeout(() => void poll(), UPDATE_PROGRESS_POLL_MS);
+        timer.unref?.();
+      }
     }
   };
   if (run) {
-    // Register only after initial observation so failed setup leaves no callback.
-    poll();
+    void poll();
     activeUpdateProgress.set(run.runId, {
       finish: finalize,
       pause: () => {
-        clearTimer();
+        pausePolling();
         stop();
       },
     });
   }
   const progress: UpdateDisplayProgress = {
     onStepStart: (step, record) => {
-      finalize(record ?? read(), false);
+      finalize(record ?? currentRecord, false);
       const label = currentPhase ? `${currentPhase} — ${step.name}` : step.name;
       if (process.stdout.isTTY) {
         currentSpinner = spinner({ indicator: "timer" });
@@ -177,7 +219,7 @@ export function createUpdateProgress(
       }
     },
     onStepComplete: (step, record) => {
-      finalize(record ?? read(), false);
+      finalize(record ?? currentRecord, false);
       printStep(step);
     },
   };
@@ -189,17 +231,19 @@ export function createUpdateProgress(
       if (observation === "active") {
         observation = "suspended";
         currentPhase = undefined;
-        clearTimer();
+        currentRecord = undefined;
+        pausePolling();
         stop();
       }
     },
     resume: () => {
       if (observation === "suspended") {
         observation = "active";
-        poll();
+        polling = true;
+        void poll();
       }
     },
-    dispose: () => finalize(read(), true),
+    dispose: () => finalize(currentRecord, true),
   };
 }
 
@@ -233,7 +277,10 @@ function printStep(step: Omit<UpdateStepResult, "cwd">): void {
     ? [step.stdoutTail, step.stderrTail]
     : updateStepDiagnostics(step).tails;
   for (const output of tails) {
-    for (const line of (output ?? "").trimEnd().split("\n").slice(-10)) {
+    for (const line of (output ?? "")
+      .trimEnd()
+      .split("\n")
+      .slice(step.termination === "signal" ? -80 : -10)) {
       if (line.trim()) {
         defaultRuntime.log(`    ${color(line)}`);
       }

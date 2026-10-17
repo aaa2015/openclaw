@@ -1,5 +1,6 @@
 import { isNativeError, isProxy } from "node:util/types";
 import type { MessagePort } from "node:worker_threads";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { OpenClawStateWorkerErrorPayload } from "../state/openclaw-state-worker-error.js";
 import type { SqliteWalCheckpointSnapshot } from "./sqlite-wal-checkpoint.js";
 import type { DatabasePathIdentity } from "./sqlite-worker-identity.js";
@@ -7,6 +8,12 @@ import type { SqliteWorkerStateContext } from "./sqlite-worker-state-context.js"
 import type { SqliteWorkerTransferHandle } from "./sqlite-worker-transfer.js";
 
 export type SqliteWorkerOperations = Record<string, { input: unknown; output: unknown }>;
+/** Process-private locator; live owner admission remains separate from this identity. */
+export type SqliteWorkerEphemeralTarget = {
+  kind: "ephemeral";
+  handle: string;
+  incarnation: string;
+};
 export type SqliteWorkerCommand<Operations extends SqliteWorkerOperations> = {
   [Key in keyof Operations]: { type: Key; input: Operations[Key]["input"] };
 }[keyof Operations];
@@ -64,6 +71,7 @@ export type SqliteWorkerRequest = {
       moduleUrl: string;
       sourceLoaderUrl?: string;
       databasePath: string;
+      target?: SqliteWorkerEphemeralTarget;
       existingIdentity?: string;
       openAdmission?: "input" | "identity";
       input: Uint8Array;
@@ -109,6 +117,20 @@ export const SQLITE_WORKER_MAX_RESULT_BYTES = 64 * 1024 * 1024;
 
 // The process-global broker can return errors to a different source/built module copy.
 const retainedWorkerErrorCode = Symbol.for("openclaw.sqliteWorkerErrorCode");
+
+export const SqliteWorkerAdmissionTimeoutError = resolveGlobalSingleton(
+  Symbol.for("openclaw.sqliteWorkerAdmissionTimeoutError"),
+  () =>
+    class AdmissionTimeoutError extends Error {
+      // Broker overload certifies non-execution; a timeout rolls back only its current transaction.
+      readonly code = "admission-timeout";
+
+      constructor() {
+        super("SQLite host admission timed out; retry after transaction rollback");
+        this.name = "SqliteWorkerAdmissionTimeoutError";
+      }
+    },
+);
 
 export class SqliteWorkerError extends Error {
   constructor(
