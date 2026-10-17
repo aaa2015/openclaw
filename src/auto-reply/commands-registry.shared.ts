@@ -503,6 +503,7 @@ export function buildBuiltinChatCommands(
     }),
     defineBuiltinCommand("name", "Name or rename the current session.", "session", "standard", {
       modelIndependent: "always",
+      textAliases: ["/name", "/rename"],
       args: [
         defineCommandArgument("title", "New session name (omit to see a suggestion)", {
           captureRemaining: true,

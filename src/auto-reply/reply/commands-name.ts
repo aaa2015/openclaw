@@ -12,6 +12,7 @@ import { matchSlashCommandToken } from "./commands-slash-parse.js";
 import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
 
 const NAME_COMMAND_PREFIX = "/name";
+const RENAME_COMMAND_PREFIX = "/rename";
 
 function syncNameSessionEntry(params: HandleCommandsParams): void {
   if (!params.sessionStore || !params.sessionKey || !params.storePath) {
@@ -29,7 +30,12 @@ function syncNameSessionEntry(params: HandleCommandsParams): void {
 }
 
 export const handleNameCommand: CommandHandler = defineAuthorizedTextCommand(
-  { label: "/name", match: (body) => matchSlashCommandToken(body, NAME_COMMAND_PREFIX) },
+  {
+    label: "/name",
+    match: (body) =>
+      matchSlashCommandToken(body, NAME_COMMAND_PREFIX) ??
+      matchSlashCommandToken(body, RENAME_COMMAND_PREFIX),
+  },
   async (params, rawTitle) => {
     if (!params.storePath || !params.sessionKey) {
       return nameReply("Naming is not available for this session.");
