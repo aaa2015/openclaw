@@ -14,7 +14,6 @@ import { resolveProviderRuntimePlugin } from "../plugins/provider-hook-runtime.j
 import {
   buildAnthropicReplayPolicyForModel,
   modelUsesResponsesHttpContinuation,
-  shouldDropClaudeThinkingBlocks,
 } from "../plugins/provider-replay-helpers.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import type { ProviderReplayPolicy } from "../plugins/types.js";
